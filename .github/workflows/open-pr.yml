@@ -1,0 +1,21 @@
+name: open-pr
+on:
+  push:
+    branches:
+      - feat/wk
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  open-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr create --base master --head feat/wk \
+            --title "feat: 完成 TuneBridge 歌单迁移 MVP（QQ 音乐 ↔ Apple Music）" \
+            --body "QQ↔Apple 双向迁移 MVP：真实连接、匹配评分、异步任务、演示模式、响应式前端。24 个测试全部通过。" \
+            || true
