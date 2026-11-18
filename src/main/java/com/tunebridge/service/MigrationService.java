@@ -52,6 +52,10 @@ public class MigrationService {
         if (sourceProvider == targetProvider) {
             throw ProviderException.badRequest("来源平台和目标平台不能相同");
         }
+        if (sourceProvider == ProviderId.NETEASE_MUSIC
+                || (targetProvider == ProviderId.NETEASE_MUSIC && sourceProvider != ProviderId.QQ_MUSIC)) {
+            throw ProviderException.badRequest("网易云音乐目前只支持作为 QQ 音乐迁移的目标平台");
+        }
         if (sourceUrl == null || sourceUrl.isBlank()) {
             throw ProviderException.badRequest("请粘贴来源歌单链接");
         }

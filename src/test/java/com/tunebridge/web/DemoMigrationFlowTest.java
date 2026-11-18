@@ -1,14 +1,27 @@
 package com.tunebridge.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tunebridge.config.TuneBridgeProperties;
+import com.tunebridge.domain.Playlist;
+import com.tunebridge.domain.ProviderConnection;
+import com.tunebridge.domain.ProviderId;
+import com.tunebridge.domain.Track;
+import com.tunebridge.provider.MusicProvider;
+import com.tunebridge.provider.ProviderRegistry;
+import com.tunebridge.service.ConnectionService;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -75,6 +88,92 @@ class DemoMigrationFlowTest {
         JsonNode qqLibrary = getJson("/api/demo/library?provider=QQ_MUSIC", session);
         assertThat(qqLibrary).hasSize(1);
         assertThat(qqLibrary.get(0).path("totalTracks").asInt()).isEqualTo(10);
+    }
+
+    @Test
+    void migratesQqToNeteaseInDemoMode() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        connectDemo(session, "QQ_MUSIC");
+        connectDemo(session, "NETEASE_MUSIC");
+
+        JsonNode job = startMigration(session, "QQ_MUSIC", "demo://builtin", "NETEASE_MUSIC", "网易云演示");
+        JsonNode done = awaitJob(session, job.path("id").asText());
+        assertThat(done.path("status").asText()).isEqualTo("COMPLETED");
+        assertThat(done.path("result").path("addedCount").asInt()).isEqualTo(12);
+        assertThat(done.path("result").path("playlistName").asText()).isEqualTo("网易云演示");
+        assertThat(getJson("/api/demo/library?provider=NETEASE_MUSIC", session)).hasSize(1);
+        assertThat(getJson("/api/demo/library?provider=NETEASE_MUSIC", new MockHttpSession())).isEmpty();
+    }
+
+    @Test
+    void backsUpDemoQqPlaylistWithoutAppleConnection() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        connectDemo(session, "QQ_MUSIC");
+
+        JsonNode state = getJson("/api/state", session);
+        assertThat(state.path("connections").path("APPLE_MUSIC").path("connected").asBoolean()).isFalse();
+        JsonNode backup = postJson("/api/playlists/backup", session,
+                Map.of("provider", "QQ_MUSIC", "url", " demo://builtin "));
+        assertThat(backup.path("name").asText()).contains("夏夜循环");
+        assertThat(backup.path("totalTracks").asInt()).isEqualTo(12);
+        assertThat(backup.path("tracks")).hasSize(12);
+        assertThat(backup.path("truncated").asBoolean()).isFalse();
+    }
+
+    @Test
+    void backsUpAllTracksWhilePreviewRemainsLimited() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        MusicProvider provider = mock(MusicProvider.class);
+        ProviderRegistry registry = mock(ProviderRegistry.class);
+        ProviderConnection connection = mock(ProviderConnection.class);
+        ConnectionService connections = mock(ConnectionService.class);
+        TuneBridgeProperties properties = new TuneBridgeProperties();
+        properties.getMigration().setMaxTracks(200);
+        List<Track> tracks = IntStream.range(0, 250)
+                .mapToObj(i -> Track.of("track-" + i, "Song " + i, "Artist", "Album", 180))
+                .toList();
+        Playlist playlist = new Playlist("id", "name", "description", "cover", "owner", "url", tracks);
+        when(registry.get(ProviderId.QQ_MUSIC)).thenReturn(provider);
+        when(connections.get(session, ProviderId.QQ_MUSIC)).thenReturn(connection);
+        when(provider.fetchPlaylist(connection, "demo://large")).thenReturn(playlist);
+        ApiController controller = new ApiController(registry, connections, null, null, properties, null, null);
+        MockMvc mockMvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller)
+                .setControllerAdvice(new ApiExceptionHandler()).build();
+        String request = objectMapper.writeValueAsString(Map.of("provider", "QQ_MUSIC", "url", " demo://large "));
+
+        MvcResult backupResult = mockMvc.perform(post("/api/playlists/backup").session(session)
+                        .contentType(MediaType.APPLICATION_JSON).content(request))
+                .andExpect(status().isOk()).andReturn();
+        JsonNode backup = readBody(backupResult);
+        assertThat(backup.path("totalTracks").asInt()).isEqualTo(250);
+        assertThat(backup.path("tracks")).hasSize(250);
+        assertThat(backup.path("tracks").get(249).path("id").asText()).isEqualTo("track-249");
+        assertThat(backup.path("truncated").asBoolean()).isFalse();
+
+        MvcResult previewResult = mockMvc.perform(post("/api/playlists/preview").session(session)
+                        .contentType(MediaType.APPLICATION_JSON).content(request))
+                .andExpect(status().isOk()).andReturn();
+        JsonNode preview = readBody(previewResult);
+        assertThat(preview.path("totalTracks").asInt()).isEqualTo(250);
+        assertThat(preview.path("tracks")).hasSize(200);
+        assertThat(preview.path("truncated").asBoolean()).isTrue();
+        verify(provider, org.mockito.Mockito.times(2)).fetchPlaylist(connection, "demo://large");
+    }
+
+    @Test
+    void rejectsBackupWithBlankOrMissingUrl() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        for (Map<String, String> request : List.of(
+                Map.of("provider", "QQ_MUSIC", "url", "   "),
+                Map.of("provider", "QQ_MUSIC"))) {
+            MvcResult result = mvc.perform(post("/api/playlists/backup").session(session)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest()).andReturn();
+            JsonNode error = readBody(result);
+            assertThat(error.path("code").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(error.path("error").asText()).isEqualTo("请粘贴来源歌单链接");
+        }
     }
 
     @Test

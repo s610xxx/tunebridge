@@ -4,7 +4,8 @@ import java.util.Locale;
 
 public enum ProviderId {
     QQ_MUSIC("QQ 音乐"),
-    APPLE_MUSIC("Apple Music");
+    APPLE_MUSIC("Apple Music"),
+    NETEASE_MUSIC("网易云音乐");
 
     private final String label;
 
@@ -24,6 +25,7 @@ public enum ProviderId {
         return switch (normalized) {
             case "QQ", "QQ_MUSIC", "QQMUSIC" -> QQ_MUSIC;
             case "APPLE", "APPLE_MUSIC", "APPLEMUSIC" -> APPLE_MUSIC;
+            case "NETEASE", "NETEASE_MUSIC", "NETEASEMUSIC", "NCM" -> NETEASE_MUSIC;
             default -> throw new IllegalArgumentException("不支持的音乐平台：" + value);
         };
     }

@@ -11,6 +11,7 @@ import com.tunebridge.provider.ProviderException;
 import com.tunebridge.provider.ProviderRegistry;
 import com.tunebridge.provider.apple.AppleDeveloperTokenService;
 import com.tunebridge.provider.demo.DemoStore;
+import com.tunebridge.provider.netease.NeteaseLocalAccess;
 import com.tunebridge.service.ConnectionService;
 import com.tunebridge.service.MigrationService;
 import com.tunebridge.web.dto.ConnectionView;
@@ -47,16 +48,19 @@ public class ApiController {
     private final DemoStore demoStore;
     private final TuneBridgeProperties properties;
     private final AppleDeveloperTokenService appleTokenService;
+    private final NeteaseLocalAccess neteaseLocalAccess;
 
     public ApiController(ProviderRegistry providerRegistry, ConnectionService connectionService,
                          MigrationService migrationService, DemoStore demoStore,
-                         TuneBridgeProperties properties, AppleDeveloperTokenService appleTokenService) {
+                         TuneBridgeProperties properties, AppleDeveloperTokenService appleTokenService,
+                         NeteaseLocalAccess neteaseLocalAccess) {
         this.providerRegistry = providerRegistry;
         this.connectionService = connectionService;
         this.migrationService = migrationService;
         this.demoStore = demoStore;
         this.properties = properties;
         this.appleTokenService = appleTokenService;
+        this.neteaseLocalAccess = neteaseLocalAccess;
     }
 
     @GetMapping("/state")
@@ -89,7 +93,8 @@ public class ApiController {
                 properties.getDemo().isEnabled(),
                 properties.getApple().getDefaultStorefront(),
                 properties.getMigration().getMaxTracks(),
-                developerToken
+                developerToken,
+                neteaseLocalAccess.enabled()
         );
     }
 
@@ -109,6 +114,8 @@ public class ApiController {
             credentials.put("cookie", request.cookie());
         } else if (providerId == ProviderId.APPLE_MUSIC) {
             credentials.put("musicUserToken", request.musicUserToken());
+        } else if (providerId == ProviderId.NETEASE_MUSIC) {
+            credentials.put("pairingCode", request.pairingCode());
         }
         ProviderConnection connection = connectionService.connect(session, providerId, request.mode(), credentials);
         return ConnectionView.from(connection);
@@ -122,14 +129,22 @@ public class ApiController {
 
     @PostMapping("/playlists/preview")
     public PlaylistView preview(@RequestBody PreviewRequest request, HttpSession session) {
+        return PlaylistView.from(fetchPlaylist(request, session), properties.getMigration().getMaxTracks());
+    }
+
+    @PostMapping("/playlists/backup")
+    public PlaylistView backup(@RequestBody PreviewRequest request, HttpSession session) {
+        return PlaylistView.from(fetchPlaylist(request, session), Integer.MAX_VALUE);
+    }
+
+    private Playlist fetchPlaylist(PreviewRequest request, HttpSession session) {
         ProviderId providerId = ProviderId.from(request.provider());
         if (request.url() == null || request.url().isBlank()) {
             throw ProviderException.badRequest("请粘贴来源歌单链接");
         }
         MusicProvider provider = providerRegistry.get(providerId);
         ProviderConnection connection = connectionService.get(session, providerId);
-        Playlist playlist = provider.fetchPlaylist(connection, request.url().trim());
-        return PlaylistView.from(playlist, properties.getMigration().getMaxTracks());
+        return provider.fetchPlaylist(connection, request.url().trim());
     }
 
     @PostMapping("/migrations")
@@ -158,7 +173,7 @@ public class ApiController {
                 .toList();
     }
 
-    public record ConnectRequest(String mode, String cookie, String musicUserToken) {
+    public record ConnectRequest(String mode, String cookie, String musicUserToken, String pairingCode) {
     }
 
     public record PreviewRequest(String provider, String url) {
