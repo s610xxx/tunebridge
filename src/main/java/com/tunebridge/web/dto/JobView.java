@@ -21,9 +21,13 @@ public record JobView(
 ) {
     public static JobView from(MigrationJob job) {
         Playlist sourcePlaylist = job.sourcePlaylist();
+        String sourceProvider = job.sourceLabel() == null
+                ? job.sourceProvider().name() : "LOCAL_BACKUP";
+        String sourceLabel = job.sourceLabel() == null
+                ? job.sourceProvider().label() : job.sourceLabel();
         SourceView source = sourcePlaylist == null ? null : new SourceView(
-                job.sourceProvider().name(),
-                job.sourceProvider().label(),
+                sourceProvider,
+                sourceLabel,
                 sourcePlaylist.name(),
                 sourcePlaylist.coverUrl(),
                 sourcePlaylist.owner(),
