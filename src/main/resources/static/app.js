@@ -3,7 +3,8 @@
 
     const PROVIDERS = {
         QQ_MUSIC: { label: 'QQ 音乐', dot: 'qq', other: 'APPLE_MUSIC' },
-        APPLE_MUSIC: { label: 'Apple Music', dot: 'apple', other: 'QQ_MUSIC' }
+        APPLE_MUSIC: { label: 'Apple Music', dot: 'apple', other: 'QQ_MUSIC' },
+        NETEASE_MUSIC: { label: '网易云音乐', dot: 'netease' }
     };
     const LEVEL_CLASS = { SUCCESS: 'is-ok', WARN: 'is-warn', ERROR: 'is-error' };
     const DEMO_SOURCE_URL = 'demo://builtin';
@@ -28,6 +29,8 @@
     let stateLoaded = false;
     let previewSeq = 0;
     let musicKitInstance = null;
+    let backupData = null;
+    let backupSeq = 0;
 
     const $ = (id) => document.getElementById(id);
 
@@ -38,13 +41,16 @@
             'headerDemoBtn', 'heroDemoBtn', 'sideDemoBtn', 'openLibraryBtn', 'sourceChip', 'targetChip',
             'swapBtn', 'sourceUrl', 'useSampleBtn', 'previewBtn', 'previewPanel', 'playlistName',
             'migrateBtn', 'migrateNote', 'linkHint', 'demoStatCount', 'status-QQ_MUSIC',
-            'status-APPLE_MUSIC', 'connectModal', 'connectTitle', 'connectSubtitle', 'connectIcon',
+            'status-APPLE_MUSIC', 'status-NETEASE_MUSIC', 'connectModal', 'connectTitle', 'connectSubtitle', 'connectIcon',
             'connectDemoBtn', 'realQQ', 'qqCookie', 'connectQQReal', 'realApple', 'appleAuthBtn',
+            'realNetease', 'neteasePairingCode', 'neteaseAuthNote', 'connectNeteaseReal',
             'appleAuthNote', 'appleTokenInput', 'connectAppleToken', 'disconnectBtn', 'progressModal',
             'progressView', 'resultView', 'progressTitle', 'progressStep', 'progressFill',
             'progressPercent', 'statMatched', 'statUnmatched', 'statTotal', 'liveLog', 'progressError',
             'libraryModal', 'libraryTitle', 'libraryTabs', 'libraryList', 'jobPill', 'jobPillText',
-            'toastContainer', 'confettiCanvas', 'workspace'
+            'toastContainer', 'confettiCanvas', 'workspace', 'backupName', 'backupUrl', 'backupReadQq',
+            'backupText', 'backupParse', 'backupFile', 'backupCount', 'backupStatus', 'backupTracks',
+            'backupJson', 'backupCsv'
         ].forEach((id) => { els[id] = $(id); });
     }
 
@@ -170,10 +176,10 @@
         if (!document.querySelector('.modal:not(.is-hidden)')) {
             document.body.classList.remove('modal-open');
         }
+        if (wasOpen && modal === els.connectModal) {
+            clearSensitiveInputs();
+        }
         if (wasOpen && !options.silent) {
-            if (modal === $('connectModal')) {
-                clearSensitiveInputs();
-            }
             if (modal === $('progressModal') && latestJob && !options.keepPill) {
                 showJobPill(latestJob);
             }
@@ -186,6 +192,7 @@
     function clearSensitiveInputs() {
         els.qqCookie.value = '';
         els.appleTokenInput.value = '';
+        els.neteasePairingCode.value = '';
     }
 
     /* ---------------- State ---------------- */
@@ -255,7 +262,7 @@
             const isSource = provider === sourceProvider;
             card.classList.toggle('is-source', isSource);
             card.classList.toggle('is-target', provider === targetProvider);
-            role.textContent = isSource ? '来源 A' : '目标 B';
+            role.textContent = isSource ? '来源 A' : provider === targetProvider ? '目标 B' : '未选用';
         });
     }
 
@@ -285,8 +292,18 @@
         renderState();
         updateChip(els.sourceChip, sourceProvider, '来源 A', 'is-source');
         updateChip(els.targetChip, targetProvider, '目标 B', 'is-target');
+        const direction = targetProvider === 'NETEASE_MUSIC' ? 'QQ_NETEASE'
+                : sourceProvider === 'APPLE_MUSIC' ? 'APPLE_QQ' : 'QQ_APPLE';
+        document.querySelectorAll('[name="directionChoice"]').forEach((input) => {
+            input.checked = input.value === direction;
+        });
+        els.swapBtn.disabled = targetProvider === 'NETEASE_MUSIC';
+        els.swapBtn.title = els.swapBtn.disabled ? '网易云音乐仅支持作为目标' : '交换迁移方向';
+        els.swapBtn.setAttribute('aria-label', els.swapBtn.title);
 
         const targetConn = connection(targetProvider);
+        els.sourceUrl.placeholder = sourceProvider === 'QQ_MUSIC'
+                ? '粘贴 QQ 音乐歌单分享链接' : '粘贴 Apple Music 歌单分享链接';
         const sourceConn = connection(sourceProvider);
         const url = els.sourceUrl.value.trim();
 
@@ -305,7 +322,9 @@
         } else if (jobRunning) {
             note = '迁移进行中，请稍候…';
         } else {
-            note = `已就绪 · 将写入 ${providerLabel(targetProvider)}`;
+            note = targetConn.mode === 'DEMO'
+                    ? `演示模式 · 不会写入真实 ${providerLabel(targetProvider)} 账号`
+                    : `真实迁移将在 ${providerLabel(targetProvider)} 创建新歌单`;
             ready = true;
         }
         els.migrateBtn.disabled = !ready || jobRunning;
@@ -325,7 +344,7 @@
         const name = chip.querySelector('span:not(.provider-dot)');
         const role = chip.querySelector('small');
         if (dot) {
-            dot.classList.remove('qq', 'apple');
+            dot.classList.remove('qq', 'apple', 'netease');
             dot.classList.add(PROVIDERS[provider].dot);
         }
         if (name) {
@@ -399,6 +418,8 @@
     }
 
     function resetSourceForDirection(clearUrl) {
+        previewSeq++;
+        els.previewBtn.disabled = false;
         hidePreview();
         if (clearUrl) {
             els.sourceUrl.value = '';
@@ -487,6 +508,125 @@
         els.previewPanel.classList.remove('is-hidden');
     }
 
+    function clearBackup() {
+        backupSeq++;
+        backupData = null;
+        els.backupCount.textContent = '0 首';
+        els.backupStatus.textContent = '读取歌单或导入曲目后，就可以预览并下载。';
+        els.backupTracks.replaceChildren();
+        els.backupJson.disabled = true;
+        els.backupCsv.disabled = true;
+    }
+
+    function showBackup(tracks, status) {
+        backupData = tracks;
+        els.backupCount.textContent = `${tracks.length} 首`;
+        els.backupStatus.textContent = status;
+        els.backupTracks.innerHTML = tracks.slice(0, 100).map((track, index) => `
+            <div class="preview-track">
+                <span>${String(index + 1).padStart(2, '0')}</span>
+                <b>${escapeHtml(track.title)}</b>
+                <em>${escapeHtml(track.artist || '未知歌手')}${track.album ? ' · ' + escapeHtml(track.album) : ''}</em>
+            </div>
+        `).join('');
+        if (tracks.length > 100) {
+            const more = document.createElement('div');
+            more.className = 'preview-more';
+            more.textContent = `仅展示前 100 首，导出包含全部 ${tracks.length} 首。`;
+            els.backupTracks.appendChild(more);
+        }
+        els.backupJson.disabled = false;
+        els.backupCsv.disabled = false;
+    }
+
+    function backupError(error) {
+        els.backupStatus.textContent = error.message;
+        toast(error.message, 'error', 6500);
+    }
+
+    function parseBackupText() {
+        clearBackup();
+        try {
+            const tracks = TuneBridgeBackup.parseLines(els.backupText.value);
+            showBackup(tracks, '已从粘贴的文本生成预览，顺序和重复曲目均会保留。');
+        } catch (error) {
+            backupError(error);
+        }
+    }
+
+    async function importBackupFile() {
+        const file = els.backupFile.files[0];
+        if (!file) return;
+        els.backupFile.value = '';
+        clearBackup();
+        const seq = backupSeq;
+        try {
+            if (file.size > 5 * 1024 * 1024) throw new Error('文件不能超过 5 MB');
+            const text = await file.text();
+            if (seq !== backupSeq) return;
+            let tracks;
+            if (/\.json$/i.test(file.name)) {
+                const playlist = TuneBridgeBackup.parseJson(text);
+                els.backupName.value = playlist.name;
+                tracks = playlist.tracks;
+            } else if (/\.csv$/i.test(file.name)) {
+                tracks = TuneBridgeBackup.parseCsv(text);
+            } else {
+                throw new Error('请选择 CSV 或 JSON 文件');
+            }
+            els.backupText.value = '';
+            showBackup(tracks, `已在本地导入 ${file.name}，顺序和重复曲目均会保留。`);
+        } catch (error) {
+            if (seq === backupSeq) backupError(error);
+        }
+    }
+
+    async function readQqBackup() {
+        clearBackup();
+        const url = els.backupUrl.value.trim();
+        if (!url) {
+            backupError(new Error('请先粘贴 QQ 音乐歌单链接'));
+            els.backupUrl.focus();
+            return;
+        }
+        const seq = backupSeq;
+        const previousName = els.backupName.value;
+        setButtonBusy(els.backupReadQq, true, '正在读取…');
+        els.backupStatus.textContent = '正在读取 QQ 音乐歌单…';
+        try {
+            const data = await api('/api/playlists/backup', {
+                method: 'POST', body: { provider: 'QQ_MUSIC', url }
+            });
+            if (seq !== backupSeq) return;
+            const playlist = TuneBridgeBackup.parseJson(JSON.stringify({ name: data.name || '', tracks: data.tracks }));
+            if (els.backupName.value === previousName) els.backupName.value = playlist.name;
+            els.backupText.value = '';
+            showBackup(playlist.tracks, '已载入平台返回的曲目；实际完整性取决于 QQ 音乐的返回结果。');
+        } catch (error) {
+            if (seq === backupSeq) backupError(error);
+        } finally {
+            setButtonBusy(els.backupReadQq, false);
+        }
+    }
+
+    function downloadBackup(format) {
+        if (!backupData) return;
+        const name = els.backupName.value.trim() || '我的歌单';
+        const fileName = name.replace(/[\u0000-\u001f<>:"/\\|?*]/g, '_').replace(/[. ]+$/, '') || '歌单备份';
+        const content = format === 'csv'
+                ? '\uFEFF' + TuneBridgeBackup.serializeCsv(backupData)
+                : TuneBridgeBackup.serializeJson({ name, tracks: backupData });
+        const type = format === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8';
+        const url = URL.createObjectURL(new Blob([content], { type }));
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${fileName}.${format}`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
     /* ---------------- Connections ---------------- */
 
     function openConnect(provider) {
@@ -495,12 +635,23 @@
         els.connectTitle.textContent = `连接 ${providerLabel(provider)}`;
         els.connectSubtitle.textContent = provider === 'QQ_MUSIC'
                 ? '公开歌单可直接读取；连接后可创建并写入歌单'
-                : '授权后，新歌单会写入你的 iCloud 音乐资料库';
+                : provider === 'APPLE_MUSIC'
+                    ? '授权后，新歌单会写入你的 iCloud 音乐资料库'
+                    : '仅作为 QQ 音乐的目标；真实模式使用服务器本机 CLI';
         const iconSource = document.querySelector(`[data-provider-card="${provider}"] .provider-icon`);
         els.connectIcon.className = `provider-icon large ${PROVIDERS[provider].dot}`;
         els.connectIcon.innerHTML = iconSource ? iconSource.innerHTML : '';
         els.realQQ.classList.toggle('is-hidden', provider !== 'QQ_MUSIC');
         els.realApple.classList.toggle('is-hidden', provider !== 'APPLE_MUSIC');
+        els.realNetease.classList.toggle('is-hidden', provider !== 'NETEASE_MUSIC');
+        if (provider === 'NETEASE_MUSIC') {
+            const ready = state.config.neteaseRealReady === true;
+            els.connectNeteaseReal.disabled = !ready;
+            els.neteasePairingCode.disabled = !ready;
+            els.neteaseAuthNote.textContent = ready
+                    ? '服务器已启用本机 CLI，请输入本机操作员设置的配对码。'
+                    : '服务器尚未启用本机 CLI，无法连接真实网易云；可使用演示授权。';
+        }
         els.disconnectBtn.classList.toggle('is-hidden', !connection(provider).connected);
         els.disconnectBtn.textContent = `断开 ${providerLabel(provider)} 连接`;
         if (provider === 'APPLE_MUSIC') {
@@ -549,6 +700,35 @@
             toast(error.message, 'error', 7000);
         } finally {
             setButtonBusy(els.connectQQReal, false);
+        }
+    }
+
+    async function connectRealNetease() {
+        if (state.config.neteaseRealReady !== true) {
+            clearSensitiveInputs();
+            toast('服务器尚未启用本机 CLI，无法连接真实网易云', 'error');
+            return;
+        }
+        const pairingCode = els.neteasePairingCode.value.trim();
+        els.neteasePairingCode.value = '';
+        if (!pairingCode) {
+            toast('请输入本机操作员设置的配对码', 'error');
+            els.neteasePairingCode.focus();
+            return;
+        }
+        setButtonBusy(els.connectNeteaseReal, true, '正在验证…');
+        try {
+            await api('/api/connections/NETEASE_MUSIC', {
+                method: 'POST', body: { mode: 'real', pairingCode }
+            });
+            if (connectProvider === 'NETEASE_MUSIC') closeModal(els.connectModal);
+            await refreshState();
+            toast('网易云本机 CLI 已连接', 'success');
+        } catch (error) {
+            toast('网易云连接失败，请检查配对码及服务器本机 CLI 状态', 'error', 7000);
+        } finally {
+            setButtonBusy(els.connectNeteaseReal, false);
+            els.connectNeteaseReal.disabled = state.config.neteaseRealReady !== true;
         }
     }
 
@@ -631,7 +811,9 @@
             await api(`/api/connections/${provider}`, { method: 'DELETE' });
             closeModal(els.connectModal);
             await refreshState();
-            toast(`已断开 ${providerLabel(provider)}`, 'info');
+            toast(provider === 'NETEASE_MUSIC'
+                    ? '已断开音桥连接；本机 CLI 未退出，账号状态可能仍保存在本机'
+                    : `已断开 ${providerLabel(provider)}`, 'info', 7000);
         } catch (error) {
             toast(error.message, 'error');
         } finally {
@@ -666,6 +848,15 @@
             toast('演示歌单需要先连接来源平台的演示账号', 'error');
             openConnect(sourceProvider);
             return;
+        }
+
+        if (connection(targetProvider).mode !== 'DEMO') {
+            const cliNote = targetProvider === 'NETEASE_MUSIC'
+                    ? '\n将使用服务器运行用户已登录的本机 CLI 账号，并非多用户授权。'
+                    : '';
+            if (!window.confirm(`真实迁移将在 ${providerLabel(targetProvider)} 创建新歌单并写入匹配歌曲。${cliNote}\n确定继续吗？`)) {
+                return;
+            }
         }
 
         jobRunning = true;
@@ -794,7 +985,8 @@
             } else {
                 showJobPill(job);
             }
-            toast(`迁移完成，已写入 ${job.result ? job.result.addedCount : 0} 首`, 'success', 5000);
+            const demoResult = job.result && String(job.result.playlistUrl || '').startsWith('demo://');
+            toast(`迁移完成，已写入${demoResult ? '演示音乐库' : ''} ${job.result ? job.result.addedCount : 0} 首`, 'success', 5000);
         } else {
             els.progressTitle.textContent = '迁移失败';
             els.progressStep.textContent = job.currentStep || '已停止';
@@ -819,6 +1011,7 @@
         const lowCount = matches.filter((item) => item.matched && item.lowConfidence).length;
         const sourceName = job.source ? job.source.name : '来源歌单';
         const demoResult = String(result.playlistUrl || '').startsWith('demo://');
+        const resultTarget = job.target && job.target.provider ? job.target.provider : targetProvider;
         const perfect = result.matchRate >= 100;
         const rows = matches.map((item) => {
             let statusClass = 'missing';
@@ -846,7 +1039,7 @@
         const linkBlock = !demoResult && /^https?:\/\//.test(result.playlistUrl || '')
                 ? `<div class="result-link"><span class="link-label">打开新歌单</span><a href="${escapeHtml(result.playlistUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(result.playlistUrl)}</a></div>`
                 : demoResult
-                    ? `<div class="result-link"><span class="link-label">演示歌单</span><span>已写入本次会话的演示音乐库，可继续作为下一次迁移的来源。</span></div>`
+                    ? `<div class="result-link"><span class="link-label">演示歌单</span><span>${resultTarget === 'NETEASE_MUSIC' ? '已写入本次会话的演示音乐库，不支持作为迁移来源。' : '已写入本次会话的演示音乐库，可继续作为下一次迁移的来源。'}</span></div>`
                     : '';
 
         els.progressView.classList.add('is-hidden');
@@ -925,7 +1118,7 @@
             await refreshState();
             sourceProvider = 'QQ_MUSIC';
             targetProvider = 'APPLE_MUSIC';
-            hidePreview();
+            resetSourceForDirection(false);
             els.sourceUrl.value = DEMO_SOURCE_URL;
             els.playlistName.value = '';
             syncDirection();
@@ -972,11 +1165,12 @@
         }
         try {
             const playlists = await api(`/api/demo/library?provider=${encodeURIComponent(provider)}`);
+            if (provider !== libraryProvider) return;
             if (!playlists || playlists.length === 0) {
                 els.libraryList.innerHTML = `
                     <div class="library-empty">
                         <strong>还没有演示歌单</strong>
-                        <span>完成一次演示迁移后，新歌单会出现在这里，并可继续作为来源。</span>
+                        <span>${provider === 'NETEASE_MUSIC' ? '完成演示迁移后，新歌单会出现在这里；网易云不支持作为来源。' : '完成一次演示迁移后，新歌单会出现在这里，并可继续作为来源。'}</span>
                     </div>`;
                 return;
             }
@@ -987,21 +1181,24 @@
                         <b>${escapeHtml(playlist.name)}</b>
                         <small>${playlist.totalTracks} 首 · ${escapeHtml(playlist.owner || '演示音乐库')}</small>
                     </div>
-                    <button type="button" class="btn btn-soft btn-small"
+                    ${provider === 'NETEASE_MUSIC' ? '<span class="library-target-only">仅作为目标</span>' : `<button type="button" class="btn btn-soft btn-small"
                             data-use-url="${escapeHtml(playlist.webUrl)}"
-                            data-use-provider="${escapeHtml(provider)}">作为来源</button>
+                            data-use-provider="${escapeHtml(provider)}">作为来源</button>`}
                 </div>
             `).join('');
         } catch (error) {
-            els.libraryList.innerHTML = `<div class="library-empty"><strong>加载失败</strong><span>${escapeHtml(error.message)}</span></div>`;
+            if (provider === libraryProvider) {
+                els.libraryList.innerHTML = `<div class="library-empty"><strong>加载失败</strong><span>${escapeHtml(error.message)}</span></div>`;
+            }
         }
     }
 
     async function useLibraryPlaylist(url, provider) {
-        if (!url) {
+        if (!url || (provider !== 'QQ_MUSIC' && provider !== 'APPLE_MUSIC')) {
             return;
         }
-        const other = otherProvider(provider);
+        const other = provider === 'QQ_MUSIC' && targetProvider === 'NETEASE_MUSIC'
+                ? 'NETEASE_MUSIC' : otherProvider(provider);
         closeModal(els.libraryModal, { silent: true });
         try {
             if (!isDemo(provider)) {
@@ -1022,6 +1219,7 @@
         }
         sourceProvider = provider;
         targetProvider = other;
+        resetSourceForDirection(false);
         els.sourceUrl.value = url;
         els.playlistName.value = '';
         syncDirection();
@@ -1117,12 +1315,37 @@
             button.addEventListener('click', runDemoFlow);
         });
         els.openLibraryBtn.addEventListener('click', () => openLibrary(sourceProvider));
+        els.backupText.addEventListener('input', clearBackup);
+        els.backupUrl.addEventListener('input', clearBackup);
+        els.backupParse.addEventListener('click', parseBackupText);
+        els.backupFile.addEventListener('change', importBackupFile);
+        els.backupReadQq.addEventListener('click', readQqBackup);
+        els.backupJson.addEventListener('click', () => downloadBackup('json'));
+        els.backupCsv.addEventListener('click', () => downloadBackup('csv'));
 
         document.querySelectorAll('[data-connect]').forEach((button) => {
             button.addEventListener('click', () => openConnect(button.dataset.connect));
         });
 
+        document.querySelectorAll('[name="directionChoice"]').forEach((input) => {
+            input.addEventListener('change', () => {
+                const previousSource = sourceProvider;
+                if (input.value === 'QQ_NETEASE') {
+                    sourceProvider = 'QQ_MUSIC';
+                    targetProvider = 'NETEASE_MUSIC';
+                } else if (input.value === 'APPLE_QQ') {
+                    sourceProvider = 'APPLE_MUSIC';
+                    targetProvider = 'QQ_MUSIC';
+                } else {
+                    sourceProvider = 'QQ_MUSIC';
+                    targetProvider = 'APPLE_MUSIC';
+                }
+                resetSourceForDirection(previousSource !== sourceProvider);
+            });
+        });
+
         els.swapBtn.addEventListener('click', () => {
+            if (targetProvider === 'NETEASE_MUSIC') return;
             const previous = providerLabel(sourceProvider);
             [sourceProvider, targetProvider] = [targetProvider, sourceProvider];
             resetSourceForDirection(true);
@@ -1130,9 +1353,9 @@
         });
 
         els.sourceUrl.addEventListener('input', () => {
-            if (previewData) {
-                hidePreview();
-            }
+            previewSeq++;
+            els.previewBtn.disabled = false;
+            hidePreview();
             syncDirection();
         });
         els.sourceUrl.addEventListener('keydown', (event) => {
@@ -1169,6 +1392,7 @@
         });
 
         els.connectQQReal.addEventListener('click', connectRealQq);
+        els.connectNeteaseReal.addEventListener('click', connectRealNetease);
         els.connectAppleToken.addEventListener('click', () => connectRealApple(els.appleTokenInput.value.trim()));
 
         els.appleAuthBtn.addEventListener('click', async () => {

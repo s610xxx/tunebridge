@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TuneBridge 音桥 · 把歌单搬到另一个音乐世界</title>
-    <meta name="description" content="TuneBridge 音桥：在浏览器中把 QQ 音乐与 Apple Music 的歌单互相迁移，自动逐首匹配并生成迁移报告。">
+    <meta name="description" content="TuneBridge 音桥：迁移 QQ 音乐与 Apple Music 歌单，或将 QQ 歌单迁移至网易云音乐。">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23ff6b57'/%3E%3Cpath d='M38 14v25.1a8.2 8.2 0 1 1-4-7V22l-14 3.4v19.7a8.2 8.2 0 1 1-4-7V20l22-6z' fill='%23fff4e8'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="/styles.css">
 </head>
@@ -44,12 +44,13 @@
                     <span>一键体验迁移</span>
                     <span class="btn-arrow">→</span>
                 </button>
+                <a class="btn btn-ghost btn-large" href="#backup">备份歌单</a>
                 <a class="btn btn-ghost btn-large" href="#workspace">进入工作台</a>
             </div>
             <div class="hero-facts">
-                <div class="fact"><strong>2</strong><span>平台双向互通</span></div>
+                <div class="fact"><strong>3</strong><span>支持的迁移方向</span></div>
                 <div class="fact"><strong>&lt;60s</strong><span>完成一次演示迁移</span></div>
-                <div class="fact"><strong>0</strong><span>账号凭据落库</span></div>
+                <div class="fact"><strong>CLI</strong><span>网易云使用本机账号</span></div>
             </div>
         </div>
 
@@ -88,11 +89,56 @@
     </section>
 
     <div class="trust-strip">
-        <span><b>无需安装</b> 浏览器直接使用</span>
+        <span><b>浏览器操作</b> 网易云真实模式需要本机 CLI</span>
         <span><b>自动匹配</b> 保留歌曲顺序</span>
-        <span><b>会话隔离</b> 凭据不落库</span>
+        <span><b>本机账号</b> CLI 登录状态可能保存在本机</span>
         <span><b>逐首报告</b> 未匹配也看得见</span>
     </div>
+
+    <section class="backup-section" id="backup">
+        <div class="section-heading">
+            <span class="kicker">PLAYLIST BACKUP</span>
+            <h2>先把歌单留在自己手里。</h2>
+            <p>读取 QQ 音乐歌单，或手动导入曲目，在浏览器中预览并备份，不需要连接 Apple Music。</p>
+        </div>
+        <div class="backup-grid">
+            <div class="flow-card backup-form">
+                <label class="field-label" for="backupName">歌单名称</label>
+                <input id="backupName" class="text-input" maxlength="100" placeholder="我的歌单">
+
+                <label class="field-label" for="backupUrl">QQ 音乐歌单链接</label>
+                <div class="backup-url-row">
+                    <input id="backupUrl" class="text-input" type="text" autocomplete="off" placeholder="粘贴 QQ 音乐歌单分享链接">
+                    <button type="button" class="btn btn-outline" id="backupReadQq">读取歌单</button>
+                </div>
+                <p class="backup-note">使用现有 QQ 读取能力，私有歌单需要先连接 QQ。真实接口的可用性和使用权限仍需确认。</p>
+
+                <div class="backup-divider"><span>或手动提供曲目</span></div>
+                <label class="field-label" for="backupText">粘贴曲目</label>
+                <textarea id="backupText" class="text-area" rows="6" placeholder="每行一首，例如：&#10;晴天 - 周杰伦&#10;小半 - 陈粒"></textarea>
+                <p class="backup-note">每行填写“歌名 - 歌手”，也支持用 Tab 分隔歌名、歌手和专辑。</p>
+                <div class="backup-input-actions">
+                    <button type="button" class="btn btn-primary" id="backupParse">生成预览</button>
+                    <label class="backup-file-label" for="backupFile">导入 CSV / JSON</label>
+                    <input id="backupFile" type="file" accept=".csv,.json,text/csv,application/json">
+                </div>
+                <p class="backup-note">文件在浏览器本地读取，不会上传。CSV 需包含 title（歌名）表头；文件大小不超过 5 MB。</p>
+            </div>
+            <div class="flow-card backup-result" aria-live="polite">
+                <div class="backup-result-head">
+                    <div><span class="kicker">YOUR PLAYLIST</span><h3>备份预览</h3></div>
+                    <span class="preview-count" id="backupCount">0 首</span>
+                </div>
+                <p class="backup-note" id="backupStatus">读取歌单或导入曲目后，就可以预览并下载。</p>
+                <div class="backup-tracks" id="backupTracks"></div>
+                <div class="backup-export-actions">
+                    <button type="button" class="btn btn-primary" id="backupJson" disabled>下载 JSON</button>
+                    <button type="button" class="btn btn-outline" id="backupCsv" disabled>下载 CSV</button>
+                </div>
+                <p class="backup-note">JSON 保留完整原文；CSV 为防止表格公式注入，会给特殊开头的内容添加单引号。备份文件不能直接自动导入音乐平台。</p>
+            </div>
+        </div>
+    </section>
 
     <section class="workspace" id="workspace">
         <div class="section-heading">
@@ -117,6 +163,16 @@
                     </div>
                     <span class="step-pill"><b>01</b> 连接目标平台</span>
                 </div>
+
+                <fieldset class="direction-options" aria-describedby="directionHelp">
+                    <legend>选择迁移方向</legend>
+                    <div class="direction-option-list">
+                        <label><input type="radio" name="directionChoice" value="QQ_APPLE" checked><span>QQ 音乐 → Apple Music</span></label>
+                        <label><input type="radio" name="directionChoice" value="APPLE_QQ"><span>Apple Music → QQ 音乐</span></label>
+                        <label><input type="radio" name="directionChoice" value="QQ_NETEASE"><span>QQ 音乐 → 网易云音乐</span></label>
+                    </div>
+                    <p id="directionHelp">QQ 与 Apple 可双向交换；网易云音乐仅支持作为目标。</p>
+                </fieldset>
 
                 <div class="provider-cards">
                     <article class="provider-card" data-provider-card="QQ_MUSIC">
@@ -152,6 +208,20 @@
                             <span class="connection-state" id="status-APPLE_MUSIC"><i></i>未连接</span>
                         </div>
                     </article>
+                    <article class="provider-card" data-provider-card="NETEASE_MUSIC">
+                        <div class="provider-head">
+                            <div class="provider-icon netease" aria-hidden="true">♫</div>
+                            <div class="provider-title">
+                                <h3>网易云音乐</h3>
+                                <p>本机 CLI · 仅作为目标</p>
+                            </div>
+                            <button type="button" class="connect-btn" data-connect="NETEASE_MUSIC">连接</button>
+                        </div>
+                        <div class="provider-base">
+                            <span class="role-badge" data-role="NETEASE_MUSIC">未选用</span>
+                            <span class="connection-state" id="status-NETEASE_MUSIC"><i></i>未连接</span>
+                        </div>
+                    </article>
                 </div>
 
                 <div class="flow-step">
@@ -178,7 +248,7 @@
                         <input id="playlistName" class="text-input" maxlength="40" placeholder="默认使用原歌单名 + 音桥">
                     </div>
                     <div class="migrate-actions">
-                        <p class="migrate-note" id="migrateNote">连接目标平台后即可开始</p>
+                        <p class="migrate-note" id="migrateNote" aria-live="polite">连接目标平台后即可开始</p>
                         <button type="button" class="btn btn-primary btn-large" id="migrateBtn" disabled>
                             <span class="btn-label">开始迁移</span>
                             <span class="btn-arrow">→</span>
@@ -195,7 +265,7 @@
                         <li><span>✓</span>逐首搜索匹配，尽量保留顺序</li>
                         <li><span>✓</span>标注 Live / Remix 版本差异</li>
                         <li><span>✓</span>未匹配歌曲逐条可见</li>
-                        <li><span>✓</span>凭据只存在会话内存</li>
+                        <li><span>✓</span>网易云 CLI 登录状态可能保存在本机</li>
                     </ul>
                 </div>
 
@@ -209,7 +279,7 @@
                 <div class="side-card stat-card">
                     <span class="stat-number" id="demoStatCount">0</span>
                     <span class="stat-label">本次会话创建的演示歌单</span>
-                    <span class="stat-hint">迁移完成后可继续作为来源</span>
+                    <span class="stat-hint">QQ / Apple 演示歌单可继续作为来源</span>
                 </div>
             </aside>
         </div>
@@ -219,7 +289,7 @@
         <div class="section-heading centered">
             <span class="kicker">UNDER THE HOOD</span>
             <h2>每一步都有迹可循。</h2>
-            <p>授权、读取、搜索、匹配、写入。你看到的不是一张结果截图，而是一条真实跑通的迁移链路。</p>
+            <p>连接、读取、搜索、匹配、写入；演示模式不触达真实账号。</p>
         </div>
         <div class="how-grid">
             <article class="how-card">
@@ -227,8 +297,8 @@
                 <div class="how-icon coral">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6l-8-3z" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m9 12 2 2 4-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </div>
-                <h3>授权目标平台</h3>
-                <p>Apple Music 通过 MusicKit 授权，QQ 音乐通过登录 Cookie 连接。凭据只进入当前服务端会话。</p>
+                <h3>连接目标平台</h3>
+                <p>Apple Music 通过 MusicKit 授权，QQ 音乐通过 Cookie 连接。网易云真实模式使用服务器运行用户已登录的本机 CLI，不是多用户授权。</p>
             </article>
             <article class="how-card">
                 <span class="how-index">02</span>
@@ -252,11 +322,12 @@
             <div class="real-note-copy">
                 <span class="kicker">REAL INTEGRATION</span>
                 <h3>真实接入，也保留体面的降级。</h3>
-                <p>没有配置 Apple 开发者令牌、或 QQ 写接口触发风控时，音桥会明确告诉你原因，而不是假装成功。演示模式用于评审体验与离线展示。</p>
+                <p>Apple 开发者令牌或网易云本机 CLI 未配置、或 QQ 写接口触发风控时，音桥会明确提示。演示模式用于体验与展示。</p>
             </div>
             <div class="real-note-grid">
                 <div><span class="provider-dot qq"></span><b>QQ 音乐</b><p>公开歌单直接读取；创建歌单与批量加歌需要有效 Cookie。</p></div>
                 <div><span class="provider-dot apple"></span><b>Apple Music</b><p>需要开发者令牌 + 用户授权；写入发生在你的 iCloud 音乐资料库。</p></div>
+                <div><span class="provider-dot netease"></span><b>网易云音乐</b><p>仅作为 QQ 的目标，真实模式使用服务器运行用户已登录的本机 CLI；账号状态可能保存在本机。</p></div>
             </div>
         </div>
     </section>
@@ -296,7 +367,7 @@
         <div class="demo-option">
             <div>
                 <strong>演示授权</strong>
-                <p>使用内置曲库，不访问任何真实账号</p>
+                <p>使用内置曲库，不访问任何真实账号；请同时使用演示来源以进行完整演示。</p>
             </div>
             <button type="button" class="btn btn-soft" id="connectDemoBtn">一键连接</button>
         </div>
@@ -332,9 +403,18 @@
             </details>
         </div>
 
+        <div id="realNetease" class="real-form is-hidden">
+            <p class="netease-explanation">真实模式使用服务器运行用户已登录的本机 CLI，并非多用户账号授权。配对码由本机操作员设置，不是平台 Key 或 Secret。</p>
+            <p class="form-note" id="neteaseAuthNote" role="status"></p>
+            <label class="field-label" for="neteasePairingCode">本机操作员设置的配对码</label>
+            <input id="neteasePairingCode" class="text-input" type="password" autocomplete="off" spellcheck="false" aria-describedby="neteaseAuthNote" placeholder="输入配对码">
+            <button type="button" class="btn btn-primary btn-block netease-connect" id="connectNeteaseReal">验证并连接本机 CLI</button>
+            <p class="form-note">断开音桥连接不等于退出 CLI；CLI 的账号状态可能保存在服务器本机。</p>
+        </div>
+
         <p class="security-note">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6l-8-3z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
-            凭据仅保存在服务端会话内存，不落库、不写日志。断开连接即清除。
+            请勿向他人透露凭据或配对码。网易云 CLI 登录状态可能保存在服务器本机，断开音桥连接不会退出 CLI。
         </p>
         <button type="button" class="text-link danger is-hidden" id="disconnectBtn">断开当前平台连接</button>
     </div>
@@ -382,11 +462,13 @@
         <div class="library-tabs" id="libraryTabs">
             <button type="button" class="library-tab active" data-library-provider="QQ_MUSIC">QQ 音乐</button>
             <button type="button" class="library-tab" data-library-provider="APPLE_MUSIC">Apple Music</button>
+            <button type="button" class="library-tab" data-library-provider="NETEASE_MUSIC">网易云音乐</button>
         </div>
         <div class="library-list" id="libraryList"></div>
     </div>
 </div>
 
+<script src="/playlist-backup.js" defer></script>
 <script src="/app.js" defer></script>
 </body>
 </html>

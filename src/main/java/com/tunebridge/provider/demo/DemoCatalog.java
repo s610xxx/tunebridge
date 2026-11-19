@@ -89,6 +89,7 @@ public class DemoCatalog {
                 new Track("279917310", "若把你", "KIV", "若把你", 214, "", 0),
                 new Track("279917311", "晚风心里吹", "阿梨粤", "晚风心里吹", 231, "", 0)
         ));
+        targetCatalogs.put(ProviderId.NETEASE_MUSIC, targetCatalogs.get(ProviderId.QQ_MUSIC));
     }
 
     public Playlist builtin(ProviderId provider) {
