@@ -1239,6 +1239,9 @@ strong { font-weight: 650; }
 .backup-result-head h3 { font-family: var(--display); font-size: 24px; margin-top: 4px; }
 .backup-tracks { max-height: 400px; overflow-y: auto; margin-top: 12px; }
 .backup-export-actions .btn { flex: 1; }
+.backup-restore .text-input { margin-bottom: 2px; }
+.backup-restore .btn-block { margin-top: 14px; }
+#backupTarget { cursor: pointer; }
 
 .migrate-options { margin-top: 2px; }
 

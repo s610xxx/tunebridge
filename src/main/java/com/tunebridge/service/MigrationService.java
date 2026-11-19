@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -76,7 +77,52 @@ public class MigrationService {
         MigrationJob job = new MigrationJob(jobId, session.getId(), sourceProvider, targetProvider,
                 sourceUrl.trim(), safeName);
         jobs.put(jobId, job);
-        executor.submit(() -> run(job, sourceConnection, targetConnection));
+        MusicProvider source = providerRegistry.get(sourceProvider);
+        executor.submit(() -> run(job,
+                () -> source.fetchPlaylist(sourceConnection, job.sourceUrl()), targetConnection));
+        return job;
+    }
+
+    public MigrationJob createBackupJob(HttpSession session, ProviderId targetProvider,
+                                        String playlistName, String sourceName, List<Track> tracks) {
+        ProviderConnection targetConnection = connectionService.require(session, targetProvider);
+        int inputLimit = Math.max(1, properties.getMigration().getMaxTracks()) * 5;
+        if (tracks == null || tracks.isEmpty()) {
+            throw ProviderException.badRequest("备份中没有可迁移的曲目");
+        }
+        if (tracks.size() > inputLimit) {
+            throw ProviderException.badRequest("备份曲目过多，单次最多处理 " + inputLimit + " 首");
+        }
+
+        List<Track> sourceTracks = new ArrayList<>();
+        for (Track track : tracks) {
+            if (track == null) {
+                continue;
+            }
+            String title = clean(track.title(), 300);
+            if (title.isBlank()) {
+                continue;
+            }
+            int duration = Math.max(0, Math.min(track.durationSec(), 24 * 3600));
+            sourceTracks.add(new Track("", title, clean(track.artist(), 300),
+                    clean(track.album(), 300), duration, "", 0));
+        }
+        if (sourceTracks.isEmpty()) {
+            throw ProviderException.badRequest("备份中没有可迁移的曲目");
+        }
+
+        String name = sanitizeName(sourceName);
+        if (name.isBlank()) {
+            name = "本地备份";
+        }
+        Playlist source = new Playlist("backup", name, "来自本地备份", "", "本地备份", "", sourceTracks);
+
+        cleanup();
+        String jobId = "mig_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+        MigrationJob job = new MigrationJob(jobId, session.getId(), targetProvider, targetProvider,
+                "backup://local", sanitizeName(playlistName), "本地备份");
+        jobs.put(jobId, job);
+        executor.submit(() -> run(job, () -> source, targetConnection));
         return job;
     }
 
@@ -88,15 +134,14 @@ public class MigrationService {
         return job;
     }
 
-    private void run(MigrationJob job, ProviderConnection sourceConnection, ProviderConnection targetConnection) {
+    private void run(MigrationJob job, Supplier<Playlist> sourceLoader, ProviderConnection targetConnection) {
         job.start();
-        MusicProvider sourceProvider = providerRegistry.get(job.sourceProvider());
         MusicProvider targetProvider = providerRegistry.get(job.targetProvider());
         CreatedPlaylist created = null;
 
         try {
             job.step("正在读取来源歌单", 5);
-            Playlist source = sourceProvider.fetchPlaylist(sourceConnection, job.sourceUrl());
+            Playlist source = sourceLoader.get();
             if (source.tracks().isEmpty()) {
                 throw ProviderException.badRequest("来源歌单没有可迁移的歌曲");
             }
@@ -114,7 +159,7 @@ public class MigrationService {
             int total = sourceTracks.size();
             int searchFailures = 0;
             ProviderException lastSearchError = null;
-            boolean realUpstream = isReal(sourceConnection) || isReal(targetConnection);
+            boolean realUpstream = isReal(targetConnection);
 
             for (int i = 0; i < total; i++) {
                 Track sourceTrack = sourceTracks.get(i);
@@ -204,6 +249,18 @@ public class MigrationService {
             return (job.status() == JobStatus.COMPLETED || job.status() == JobStatus.FAILED)
                     && job.createdAt().isBefore(cutoff);
         });
+    }
+
+    private static String clean(String value, int maxLength) {
+        if (value == null) {
+            return "";
+        }
+        String cleaned = value.replaceAll("[\\p{Cntrl}]", "").replaceAll("\\s+", " ").trim();
+        int count = cleaned.codePointCount(0, cleaned.length());
+        if (count <= maxLength) {
+            return cleaned;
+        }
+        return cleaned.substring(0, cleaned.offsetByCodePoints(0, maxLength)).trim();
     }
 
     private static String sanitizeName(String name) {

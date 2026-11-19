@@ -99,7 +99,7 @@
         <div class="section-heading">
             <span class="kicker">PLAYLIST BACKUP</span>
             <h2>先把歌单留在自己手里。</h2>
-            <p>读取 QQ 音乐歌单，或手动导入曲目，在浏览器中预览并备份，不需要连接 Apple Music。</p>
+            <p>读取 QQ 音乐歌单，或手动导入曲目，在浏览器中预览、备份，并恢复到已连接的音乐平台。</p>
         </div>
         <div class="backup-grid">
             <div class="flow-card backup-form">
@@ -135,7 +135,15 @@
                     <button type="button" class="btn btn-primary" id="backupJson" disabled>下载 JSON</button>
                     <button type="button" class="btn btn-outline" id="backupCsv" disabled>下载 CSV</button>
                 </div>
-                <p class="backup-note">JSON 保留完整原文；CSV 为防止表格公式注入，会给特殊开头的内容添加单引号。备份文件不能直接自动导入音乐平台。</p>
+                <p class="backup-note">JSON 保留完整原文；CSV 为防止表格公式注入，会给特殊开头的内容添加单引号。</p>
+
+                <div class="backup-divider"><span>恢复到音乐平台</span></div>
+                <div class="backup-restore">
+                    <label class="field-label" for="backupTarget">目标平台</label>
+                    <select id="backupTarget" class="text-input"></select>
+                    <p class="backup-note" id="backupTargetNote">连接目标平台后即可恢复。</p>
+                    <button type="button" class="btn btn-primary btn-block" id="backupMigrate" disabled>开始恢复迁移</button>
+                </div>
             </div>
         </div>
     </section>

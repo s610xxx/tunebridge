@@ -6,6 +6,7 @@ import com.tunebridge.domain.MigrationJob;
 import com.tunebridge.domain.Playlist;
 import com.tunebridge.domain.ProviderConnection;
 import com.tunebridge.domain.ProviderId;
+import com.tunebridge.domain.Track;
 import com.tunebridge.provider.MusicProvider;
 import com.tunebridge.provider.ProviderException;
 import com.tunebridge.provider.ProviderRegistry;
@@ -147,6 +148,27 @@ public class ApiController {
         return provider.fetchPlaylist(connection, request.url().trim());
     }
 
+    @PostMapping("/backups/migrations")
+    public JobView startBackupMigration(@RequestBody BackupMigrationRequest request, HttpSession session) {
+        if (request == null || request.targetProvider() == null) {
+            throw ProviderException.badRequest("请选择目标平台");
+        }
+        ProviderId target = ProviderId.from(request.targetProvider());
+        List<Track> tracks = new ArrayList<>();
+        if (request.tracks() != null) {
+            for (BackupTrack item : request.tracks()) {
+                if (item == null) {
+                    continue;
+                }
+                int duration = item.durationSec() == null ? 0 : Math.max(0, item.durationSec());
+                tracks.add(new Track("", item.title(), item.artist(), item.album(), duration, "", 0));
+            }
+        }
+        MigrationJob job = migrationService.createBackupJob(session, target, request.playlistName(),
+                request.sourceName(), tracks);
+        return JobView.from(job);
+    }
+
     @PostMapping("/migrations")
     public JobView startMigration(@RequestBody MigrationRequest request, HttpSession session) {
         ProviderId source = ProviderId.from(request.sourceProvider());
@@ -181,5 +203,12 @@ public class ApiController {
 
     public record MigrationRequest(String sourceProvider, String sourceUrl,
                                    String targetProvider, String playlistName) {
+    }
+
+    public record BackupMigrationRequest(String targetProvider, String playlistName,
+                                         String sourceName, List<BackupTrack> tracks) {
+    }
+
+    public record BackupTrack(String title, String artist, String album, Integer durationSec) {
     }
 }

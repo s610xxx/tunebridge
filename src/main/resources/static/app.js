@@ -50,7 +50,7 @@
             'libraryModal', 'libraryTitle', 'libraryTabs', 'libraryList', 'jobPill', 'jobPillText',
             'toastContainer', 'confettiCanvas', 'workspace', 'backupName', 'backupUrl', 'backupReadQq',
             'backupText', 'backupParse', 'backupFile', 'backupCount', 'backupStatus', 'backupTracks',
-            'backupJson', 'backupCsv'
+            'backupJson', 'backupCsv', 'backupTarget', 'backupMigrate', 'backupTargetNote'
         ].forEach((id) => { els[id] = $(id); });
     }
 
@@ -208,6 +208,7 @@
             syncDirection();
             updateDemoAvailability();
             refreshDemoCount();
+            renderBackupTargets();
             return true;
         } catch (error) {
             stateLoaded = false;
@@ -516,6 +517,9 @@
         els.backupTracks.replaceChildren();
         els.backupJson.disabled = true;
         els.backupCsv.disabled = true;
+        if (els.backupMigrate) {
+            els.backupMigrate.disabled = true;
+        }
     }
 
     function showBackup(tracks, status) {
@@ -537,6 +541,9 @@
         }
         els.backupJson.disabled = false;
         els.backupCsv.disabled = false;
+        if (els.backupMigrate) {
+            els.backupMigrate.disabled = false;
+        }
     }
 
     function backupError(error) {
@@ -625,6 +632,41 @@
         link.click();
         link.remove();
         window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function renderBackupTargets() {
+        if (!els.backupTarget) {
+            return;
+        }
+        const order = ['APPLE_MUSIC', 'QQ_MUSIC', 'NETEASE_MUSIC'];
+        const current = els.backupTarget.value;
+        els.backupTarget.innerHTML = order.map((provider) => {
+            const conn = connection(provider);
+            const suffix = conn.connected ? (conn.mode === 'DEMO' ? ' · 演示' : ' · 已连接') : ' · 未连接';
+            return `<option value="${provider}">${escapeHtml(providerLabel(provider) + suffix)}</option>`;
+        }).join('');
+        const connected = order.find((provider) => connection(provider).connected);
+        els.backupTarget.value = order.includes(current) ? current : (connected || 'APPLE_MUSIC');
+        updateBackupTargetNote();
+    }
+
+    function updateBackupTargetNote() {
+        if (!els.backupTargetNote) {
+            return;
+        }
+        const target = els.backupTarget.value;
+        if (!target) {
+            els.backupTargetNote.textContent = '连接目标平台后即可恢复。';
+            return;
+        }
+        const conn = connection(target);
+        if (!conn.connected) {
+            els.backupTargetNote.textContent = `尚未连接 ${providerLabel(target)}，开始恢复前需要先连接。`;
+        } else if (conn.mode === 'DEMO') {
+            els.backupTargetNote.textContent = '演示模式：新歌单只写入本次会话的演示音乐库。';
+        } else {
+            els.backupTargetNote.textContent = '真实模式：会在目标平台创建新歌单并写入匹配成功的歌曲。';
+        }
     }
 
     /* ---------------- Connections ---------------- */
@@ -859,6 +901,63 @@
             }
         }
 
+        await runJob(() => api('/api/migrations', {
+            method: 'POST',
+            body: {
+                sourceProvider,
+                sourceUrl: url,
+                targetProvider,
+                playlistName: els.playlistName.value.trim()
+            }
+        }));
+    }
+
+    async function startBackupMigration() {
+        if (jobRunning) {
+            toast('已有迁移任务正在进行', 'info');
+            return;
+        }
+        if (!backupData || backupData.length === 0) {
+            toast('请先读取歌单、粘贴曲目或导入文件', 'error');
+            return;
+        }
+        const target = els.backupTarget.value;
+        if (!connection(target).connected) {
+            toast(`请先连接目标平台 ${providerLabel(target)}`, 'error');
+            openConnect(target);
+            return;
+        }
+        if (connection(target).mode !== 'DEMO') {
+            const cliNote = target === 'NETEASE_MUSIC'
+                    ? '\n将使用服务器运行用户已登录的本机 CLI 账号，并非多用户授权。'
+                    : '';
+            if (!window.confirm(`恢复会在 ${providerLabel(target)} 创建新歌单并写入匹配歌曲。${cliNote}\n确定继续吗？`)) {
+                return;
+            }
+        }
+        const limit = Number(state.config.maxTracks) > 0 ? Number(state.config.maxTracks) : 200;
+        const selected = backupData.slice(0, limit);
+        if (backupData.length > limit) {
+            toast(`单次最多恢复 ${limit} 首，本次使用前 ${limit} 首`, 'info', 6000);
+        }
+        const tracks = selected.map((track) => ({
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+            durationSec: track.durationSec
+        }));
+        await runJob(() => api('/api/backups/migrations', {
+            method: 'POST',
+            body: {
+                targetProvider: target,
+                playlistName: els.backupName.value.trim(),
+                sourceName: els.backupName.value.trim(),
+                tracks
+            }
+        }));
+    }
+
+    async function runJob(request) {
         jobRunning = true;
         latestJob = null;
         currentJobId = null;
@@ -868,15 +967,7 @@
         openModal(els.progressModal);
 
         try {
-            const job = await api('/api/migrations', {
-                method: 'POST',
-                body: {
-                    sourceProvider,
-                    sourceUrl: url,
-                    targetProvider,
-                    playlistName: els.playlistName.value.trim()
-                }
-            });
+            const job = await request();
             latestJob = job;
             currentJobId = job.id;
             renderJob(job);
@@ -1060,7 +1151,7 @@
             <div class="result-list">${rows || '<div class="library-empty">没有逐首报告</div>'}</div>
             <div class="result-actions">
                 ${demoResult ? '<button type="button" class="btn btn-outline" data-result-action="library">查看演示音乐库</button>' : ''}
-                <button type="button" class="btn btn-ghost" data-result-action="again">再迁一次</button>
+                ${job.source && job.source.provider === 'LOCAL_BACKUP' ? '' : '<button type="button" class="btn btn-ghost" data-result-action="again">再迁一次</button>'}
                 <button type="button" class="btn btn-primary" data-result-action="close">完成</button>
             </div>
         `;
@@ -1322,6 +1413,8 @@
         els.backupReadQq.addEventListener('click', readQqBackup);
         els.backupJson.addEventListener('click', () => downloadBackup('json'));
         els.backupCsv.addEventListener('click', () => downloadBackup('csv'));
+        els.backupMigrate.addEventListener('click', startBackupMigration);
+        els.backupTarget.addEventListener('change', updateBackupTargetNote);
 
         document.querySelectorAll('[data-connect]').forEach((button) => {
             button.addEventListener('click', () => openConnect(button.dataset.connect));

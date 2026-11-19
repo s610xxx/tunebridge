@@ -177,6 +177,96 @@ class DemoMigrationFlowTest {
     }
 
     @Test
+    void restoresLocalBackupToDemoTarget() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        connectDemo(session, "QQ_MUSIC");
+        connectDemo(session, "APPLE_MUSIC");
+
+        JsonNode backup = postJson("/api/playlists/backup", session,
+                Map.of("provider", "QQ_MUSIC", "url", "demo://builtin"));
+        List<Map<String, Object>> tracks = new java.util.ArrayList<>();
+        for (JsonNode track : backup.path("tracks")) {
+            tracks.add(Map.of(
+                    "title", track.path("title").asText(),
+                    "artist", track.path("artist").asText(),
+                    "album", track.path("album").asText(),
+                    "durationSec", track.path("durationSec").asInt()));
+        }
+
+        JsonNode job = postJson("/api/backups/migrations", session, Map.of(
+                "targetProvider", "APPLE_MUSIC",
+                "playlistName", "备份恢复",
+                "sourceName", "夏夜循环",
+                "tracks", tracks));
+        JsonNode done = awaitJob(session, job.path("id").asText());
+
+        assertThat(done.path("status").asText()).isEqualTo("COMPLETED");
+        assertThat(done.path("source").path("provider").asText()).isEqualTo("LOCAL_BACKUP");
+        assertThat(done.path("source").path("providerLabel").asText()).isEqualTo("本地备份");
+        assertThat(done.path("source").path("name").asText()).isEqualTo("夏夜循环");
+        assertThat(done.path("result").path("playlistName").asText()).isEqualTo("备份恢复");
+        assertThat(done.path("result").path("addedCount").asInt()).isEqualTo(10);
+        assertThat(done.path("result").path("unmatchedCount").asInt()).isEqualTo(2);
+        assertThat(done.path("result").path("matchRate").asInt()).isEqualTo(83);
+
+        JsonNode library = getJson("/api/demo/library?provider=APPLE_MUSIC", session);
+        assertThat(library).hasSize(1);
+        assertThat(library.get(0).path("name").asText()).isEqualTo("备份恢复");
+        assertThat(library.get(0).path("totalTracks").asInt()).isEqualTo(10);
+    }
+
+    @Test
+    void restoresBackupWithoutASourceConnection() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        connectDemo(session, "APPLE_MUSIC");
+
+        JsonNode job = postJson("/api/backups/migrations", session, Map.of(
+                "targetProvider", "APPLE_MUSIC",
+                "playlistName", "纯本地恢复",
+                "sourceName", "手动清单",
+                "tracks", List.of(Map.of(
+                        "title", "晴天",
+                        "artist", "周杰伦",
+                        "album", "叶惠美",
+                        "durationSec", 269))));
+        JsonNode done = awaitJob(session, job.path("id").asText());
+
+        assertThat(done.path("status").asText()).isEqualTo("COMPLETED");
+        assertThat(done.path("result").path("addedCount").asInt()).isEqualTo(1);
+        assertThat(done.path("result").path("matchRate").asInt()).isEqualTo(100);
+    }
+
+    @Test
+    void rejectsBackupRestoreWithoutTargetConnection() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        mvc.perform(post("/api/backups/migrations")
+                        .session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "targetProvider", "APPLE_MUSIC",
+                                "playlistName", "未连接",
+                                "tracks", List.of(Map.of("title", "晴天"))))))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void rejectsEmptyBackupRestore() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        connectDemo(session, "APPLE_MUSIC");
+        MvcResult result = mvc.perform(post("/api/backups/migrations")
+                        .session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "targetProvider", "APPLE_MUSIC",
+                                "playlistName", "空备份",
+                                "tracks", List.of()))))
+                .andExpect(status().isBadRequest()).andReturn();
+        JsonNode error = readBody(result);
+        assertThat(error.path("code").asText()).isEqualTo("INVALID_INPUT");
+        assertThat(error.path("error").asText()).isEqualTo("备份中没有可迁移的曲目");
+    }
+
+    @Test
     void rejectsMigrationWhenTargetIsNotConnected() throws Exception {
         MockHttpSession session = new MockHttpSession();
         connectDemo(session, "QQ_MUSIC");

@@ -17,6 +17,7 @@ public class MigrationJob {
     private final ProviderId targetProvider;
     private final String sourceUrl;
     private final String requestedName;
+    private final String sourceLabel;
     private final Instant createdAt = Instant.now();
 
     private final List<LogEntry> logs = new ArrayList<>();
@@ -31,12 +32,18 @@ public class MigrationJob {
 
     public MigrationJob(String id, String sessionId, ProviderId sourceProvider, ProviderId targetProvider,
                         String sourceUrl, String requestedName) {
+        this(id, sessionId, sourceProvider, targetProvider, sourceUrl, requestedName, null);
+    }
+
+    public MigrationJob(String id, String sessionId, ProviderId sourceProvider, ProviderId targetProvider,
+                        String sourceUrl, String requestedName, String sourceLabel) {
         this.id = id;
         this.sessionId = sessionId;
         this.sourceProvider = sourceProvider;
         this.targetProvider = targetProvider;
         this.sourceUrl = sourceUrl;
         this.requestedName = requestedName;
+        this.sourceLabel = sourceLabel;
     }
 
     public synchronized void start() {
@@ -116,6 +123,10 @@ public class MigrationJob {
 
     public String requestedName() {
         return requestedName;
+    }
+
+    public String sourceLabel() {
+        return sourceLabel;
     }
 
     public JobStatus status() {
