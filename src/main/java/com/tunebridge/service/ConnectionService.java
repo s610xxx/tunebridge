@@ -55,7 +55,9 @@ public class ConnectionService {
     }
 
     public ProviderConnection get(HttpSession session, ProviderId providerId) {
-        return connections(session).get(providerId);
+        synchronized (session) {
+            return connections(session).get(providerId);
+        }
     }
 
     public ProviderConnection require(HttpSession session, ProviderId providerId) {
@@ -67,7 +69,9 @@ public class ConnectionService {
     }
 
     public Map<ProviderId, ProviderConnection> all(HttpSession session) {
-        return new EnumMap<>(connections(session));
+        synchronized (session) {
+            return new EnumMap<>(connections(session));
+        }
     }
 
     public void disconnect(HttpSession session, ProviderId providerId) {

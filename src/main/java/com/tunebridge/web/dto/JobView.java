@@ -5,6 +5,7 @@ import com.tunebridge.domain.MigrationJob;
 import com.tunebridge.domain.Playlist;
 import com.tunebridge.domain.TrackMatch;
 import java.util.List;
+import java.util.stream.IntStream;
 
 public record JobView(
         String id,
@@ -17,11 +18,22 @@ public record JobView(
         List<MatchView> matches,
         ResultView result,
         String error,
-        String createdAt
+        String createdAt,
+        boolean readOnly,
+        String recoveryNotice,
+        CreatedTargetView createdTarget
 ) {
     public static JobView from(MigrationJob job) {
+        synchronized (job) {
+            return snapshot(job);
+        }
+    }
+
+    private static JobView snapshot(MigrationJob job) {
         Playlist sourcePlaylist = job.sourcePlaylist();
-        SourceView source = sourcePlaylist == null ? null : new SourceView(
+        SourceView source = sourcePlaylist == null ? new SourceView(job.sourceProvider().name(),
+                job.sourceProvider().label(), job.requestedName().isBlank() ? "正在读取歌单" : job.requestedName(),
+                "", "", 0) : new SourceView(
                 job.sourceProvider().name(),
                 job.sourceProvider().label(),
                 sourcePlaylist.name(),
@@ -29,22 +41,46 @@ public record JobView(
                 sourcePlaylist.owner(),
                 sourcePlaylist.tracks().size()
         );
-        TargetView target = new TargetView(job.targetProvider().name(), job.targetProvider().label());
-        List<MatchView> matches = job.matchesSnapshot().stream().map(MatchView::from).toList();
+        TargetView target = new TargetView(job.targetProvider().name(), job.targetProvider().label(),
+                job.targetMode().name());
+        List<TrackMatch> snapshot = job.matchesSnapshot();
+        List<Integer> selected = job.selectedIndicesSnapshot();
+        List<MatchView> matches = IntStream.range(0, snapshot.size())
+                .mapToObj(index -> MatchView.from(index, snapshot.get(index), selected.contains(index))).toList();
 
         ResultView result = null;
         if (job.result() != null) {
             int added = job.result().trackCount();
             int total = matches.size();
-            int unmatched = Math.max(0, total - added);
-            int rate = total == 0 ? 0 : (int) Math.round(added * 100.0 / total);
+            int matched = (int) matches.stream().filter(MatchView::matched).count();
+            int unmatched = total - matched;
+            int skipped = matched - added;
+            int rate = total == 0 ? 0 : (int) Math.round(matched * 100.0 / total);
             result = new ResultView(job.result().id(), job.result().name(), job.result().url(),
-                    added, unmatched, total, rate);
+                    added, unmatched, total, rate, skipped, matched);
         }
 
         return new JobView(job.id(), job.status().name(), job.progress(), job.currentStep(),
                 source, target, job.logsSnapshot(), matches, result,
-                job.error().isBlank() ? null : job.error(), job.createdAt().toString());
+                job.error().isBlank() ? null : job.error(), job.createdAt().toString(), false,
+                job.recoveryNotice(), job.createdTarget() == null ? null : new CreatedTargetView(
+                        job.createdTarget().id(), job.createdTarget().name(), job.createdTarget().url()));
+    }
+
+    public JobView asReadOnly() {
+        return new JobView(id, status, progress, currentStep, source, target, logs, matches, result, error,
+                createdAt, true, recoveryNotice, createdTarget);
+    }
+
+    public JobView interruptedAfterRestart(boolean writeStarted) {
+        String notice = writeStarted
+                ? "服务重启时任务处于写入阶段，结果待核查；目标平台可能已创建歌单或加入歌曲，请手动检查，勿自动重试。"
+                : "服务重启，任务已中断；未开始写入目标平台。请重新登录、连接并匹配，未确认预览不会自动恢复。";
+        return new JobView(id, "INTERRUPTED", progress, writeStarted ? "写入结果待核查" : "任务已中断",
+                source, target, logs, matches, result, notice, createdAt, true, notice, createdTarget);
+    }
+
+    public record CreatedTargetView(String playlistId, String playlistName, String playlistUrl) {
     }
 
     public record SourceView(
@@ -57,10 +93,12 @@ public record JobView(
     ) {
     }
 
-    public record TargetView(String provider, String providerLabel) {
+    public record TargetView(String provider, String providerLabel, String mode) {
     }
 
     public record MatchView(
+            int index,
+            boolean selected,
             String title,
             String artist,
             String album,
@@ -74,8 +112,10 @@ public record JobView(
             int score,
             String note
     ) {
-        public static MatchView from(TrackMatch match) {
+        public static MatchView from(int index, TrackMatch match, boolean selected) {
             return new MatchView(
+                    index,
+                    selected,
                     match.source().title(),
                     match.source().artist(),
                     match.source().album(),
@@ -99,7 +139,9 @@ public record JobView(
             int addedCount,
             int unmatchedCount,
             int totalCount,
-            int matchRate
+            int matchRate,
+            int skippedCount,
+            int matchedCount
     ) {
     }
 }
