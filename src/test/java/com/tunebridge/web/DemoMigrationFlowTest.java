@@ -10,7 +10,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -28,17 +27,23 @@ import com.tunebridge.domain.TrackMatch;
 import com.tunebridge.provider.MusicProvider;
 import com.tunebridge.provider.ProviderException;
 import com.tunebridge.provider.ProviderRegistry;
+import com.tunebridge.security.AccountPrincipal;
+import com.tunebridge.security.AccountService;
 import com.tunebridge.service.ConnectionService;
+import com.tunebridge.service.MigrationHistory;
 import com.tunebridge.service.MigrationService;
 import com.tunebridge.service.TrackMatcher;
+import com.tunebridge.testsupport.BridgeRequests;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -48,15 +53,31 @@ import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
-@SpringBootTest
+@SpringBootTest(properties = "spring.datasource.url=jdbc:h2:mem:flow_test;DB_CLOSE_DELAY=-1")
 @AutoConfigureMockMvc
 class DemoMigrationFlowTest {
+
+    private static final String PASSWORD = "bridge-test-password";
 
     @Autowired
     private MockMvc mvc;
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private AccountService accounts;
+
+    private AccountPrincipal principal;
+    private String ownerId;
+
+    @BeforeEach
+    void registerAccount() {
+        String username = "t" + UUID.randomUUID().toString().replace("-", "").substring(0, 15);
+        accounts.register(username, PASSWORD, null);
+        principal = accounts.loadUserByUsername(username);
+        ownerId = principal.id();
+    }
 
     @Test
     void migratesBothDirectionsInDemoMode() throws Exception {
@@ -79,6 +100,7 @@ class DemoMigrationFlowTest {
         JsonNode firstPreview = awaitJob(session, firstJob.path("id").asText());
         assertThat(firstPreview.path("status").asText()).isEqualTo("AWAITING_CONFIRMATION");
         assertThat(firstPreview.path("target").path("mode").asText()).isEqualTo("DEMO");
+        assertThat(firstPreview.path("readOnly").asBoolean()).isFalse();
         assertThat(getJson("/api/demo/library?provider=APPLE_MUSIC", session)).isEmpty();
         confirmAllMatches(session, firstPreview);
         JsonNode firstDone = awaitJob(session, firstJob.path("id").asText());
@@ -164,11 +186,11 @@ class DemoMigrationFlowTest {
         when(connections.get(session, ProviderId.QQ_MUSIC)).thenReturn(connection);
         when(provider.fetchPlaylist(connection, "demo://large")).thenReturn(playlist);
         ApiController controller = new ApiController(registry, connections, null, null, properties, null, null);
-        MockMvc mockMvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller)
+        var mockMvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new ApiExceptionHandler()).build();
         String request = objectMapper.writeValueAsString(Map.of("provider", "QQ_MUSIC", "url", " demo://large "));
 
-        MvcResult backupResult = mockMvc.perform(post("/api/playlists/backup").session(session)
+        MvcResult backupResult = mockMvc.perform(BridgeRequests.post("/api/playlists/backup").session(session)
                         .contentType(MediaType.APPLICATION_JSON).content(request))
                 .andExpect(status().isOk()).andReturn();
         JsonNode backup = readBody(backupResult);
@@ -177,14 +199,14 @@ class DemoMigrationFlowTest {
         assertThat(backup.path("tracks").get(249).path("id").asText()).isEqualTo("track-249");
         assertThat(backup.path("truncated").asBoolean()).isFalse();
 
-        MvcResult previewResult = mockMvc.perform(post("/api/playlists/preview").session(session)
+        MvcResult previewResult = mockMvc.perform(BridgeRequests.post("/api/playlists/preview").session(session)
                         .contentType(MediaType.APPLICATION_JSON).content(request))
                 .andExpect(status().isOk()).andReturn();
         JsonNode preview = readBody(previewResult);
         assertThat(preview.path("totalTracks").asInt()).isEqualTo(250);
         assertThat(preview.path("tracks")).hasSize(200);
         assertThat(preview.path("truncated").asBoolean()).isTrue();
-        verify(provider, org.mockito.Mockito.times(2)).fetchPlaylist(connection, "demo://large");
+        verify(provider, times(2)).fetchPlaylist(connection, "demo://large");
     }
 
     @Test
@@ -193,9 +215,10 @@ class DemoMigrationFlowTest {
         for (Map<String, String> request : List.of(
                 Map.of("provider", "QQ_MUSIC", "url", "   "),
                 Map.of("provider", "QQ_MUSIC"))) {
-            MvcResult result = mvc.perform(post("/api/playlists/backup").session(session)
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content(objectMapper.writeValueAsString(request)))
+            MvcResult result = mvc.perform(BridgeRequests.as(
+                            BridgeRequests.post("/api/playlists/backup").session(session)
+                                    .contentType(MediaType.APPLICATION_JSON)
+                                    .content(objectMapper.writeValueAsString(request)), principal))
                     .andExpect(status().isBadRequest()).andReturn();
             JsonNode error = readBody(result);
             assertThat(error.path("code").asText()).isEqualTo("INVALID_INPUT");
@@ -208,14 +231,14 @@ class DemoMigrationFlowTest {
         MockHttpSession session = new MockHttpSession();
         connectDemo(session, "QQ_MUSIC");
 
-        mvc.perform(post("/api/migrations")
-                        .session(session)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(Map.of(
-                                "sourceProvider", "QQ_MUSIC",
-                                "sourceUrl", "demo://builtin",
-                                "targetProvider", "APPLE_MUSIC",
-                                "playlistName", ""))))
+        mvc.perform(BridgeRequests.as(
+                        BridgeRequests.post("/api/migrations").session(session)
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(objectMapper.writeValueAsString(Map.of(
+                                        "sourceProvider", "QQ_MUSIC",
+                                        "sourceUrl", "demo://builtin",
+                                        "targetProvider", "APPLE_MUSIC",
+                                        "playlistName", ""))), principal))
                 .andExpect(status().isConflict());
     }
 
@@ -275,8 +298,9 @@ class DemoMigrationFlowTest {
                 Map.of("selectedIndices", List.of(0.5)),
                 Map.of("selectedIndices", List.of("0")),
                 Map.of("selectedIndices", List.of(2147483648L)))) {
-            mvc.perform(post(confirmUrl).session(session).contentType(MediaType.APPLICATION_JSON)
-                            .content(objectMapper.writeValueAsString(request)))
+            mvc.perform(BridgeRequests.as(BridgeRequests.post(confirmUrl).session(session)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)), principal))
                     .andExpect(status().isBadRequest());
             assertThat(getJson("/api/migrations/" + job.path("id").asText(), session)
                     .path("status").asText()).isEqualTo("AWAITING_CONFIRMATION");
@@ -293,16 +317,23 @@ class DemoMigrationFlowTest {
         awaitJob(session, job.path("id").asText());
         String confirmUrl = "/api/migrations/" + job.path("id").asText() + "/confirm";
         String body = objectMapper.writeValueAsString(Map.of("selectedIndices", List.of(0)));
-        mvc.perform(post(confirmUrl).session(new MockHttpSession()).contentType(MediaType.APPLICATION_JSON)
-                        .content(body)).andExpect(status().isNotFound());
+        // Another session of the same account may read the job but never confirm it.
+        MvcResult otherSession = mvc.perform(BridgeRequests.as(
+                        BridgeRequests.post(confirmUrl).session(new MockHttpSession())
+                                .contentType(MediaType.APPLICATION_JSON).content(body), principal))
+                .andExpect(status().isConflict()).andReturn();
+        assertThat(readBody(otherSession).path("code").asText()).isEqualTo("HISTORY_READ_ONLY");
         connectDemo(session, "APPLE_MUSIC");
-        MvcResult replaced = mvc.perform(post(confirmUrl).session(session).contentType(MediaType.APPLICATION_JSON)
-                        .content(body)).andExpect(status().isConflict()).andReturn();
+        MvcResult replaced = mvc.perform(BridgeRequests.as(
+                        BridgeRequests.post(confirmUrl).session(session)
+                                .contentType(MediaType.APPLICATION_JSON).content(body), principal))
+                .andExpect(status().isConflict()).andReturn();
         assertThat(readBody(replaced).path("code").asText()).isEqualTo("TARGET_CHANGED");
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
-                .delete("/api/connections/APPLE_MUSIC").session(session)).andExpect(status().isNoContent());
-        mvc.perform(post(confirmUrl).session(session).contentType(MediaType.APPLICATION_JSON)
-                        .content(body)).andExpect(status().isConflict());
+        mvc.perform(BridgeRequests.as(BridgeRequests.delete("/api/connections/APPLE_MUSIC")
+                .session(session), principal)).andExpect(status().isNoContent());
+        mvc.perform(BridgeRequests.as(BridgeRequests.post(confirmUrl).session(session)
+                        .contentType(MediaType.APPLICATION_JSON).content(body), principal))
+                .andExpect(status().isConflict());
         connectDemo(session, "APPLE_MUSIC");
         assertThat(getJson("/api/demo/library?provider=APPLE_MUSIC", session)).isEmpty();
     }
@@ -320,8 +351,9 @@ class DemoMigrationFlowTest {
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             java.util.concurrent.Callable<Integer> confirm = () -> {
                 start.await();
-                return mvc.perform(post(confirmUrl).session(session).contentType(MediaType.APPLICATION_JSON)
-                                .content(body)).andReturn().getResponse().getStatus();
+                return mvc.perform(BridgeRequests.as(BridgeRequests.post(confirmUrl).session(session)
+                                .contentType(MediaType.APPLICATION_JSON).content(body), principal))
+                        .andReturn().getResponse().getStatus();
             };
             var first = executor.submit(confirm);
             var second = executor.submit(confirm);
@@ -331,8 +363,9 @@ class DemoMigrationFlowTest {
         }
         assertThat(awaitJob(session, job.path("id").asText()).path("status").asText()).isEqualTo("COMPLETED");
         assertThat(getJson("/api/demo/library?provider=APPLE_MUSIC", session)).hasSize(1);
-        mvc.perform(post(confirmUrl).session(session).contentType(MediaType.APPLICATION_JSON)
-                        .content(body)).andExpect(status().isConflict());
+        mvc.perform(BridgeRequests.as(BridgeRequests.post(confirmUrl).session(session)
+                        .contentType(MediaType.APPLICATION_JSON).content(body), principal))
+                .andExpect(status().isConflict());
         assertThat(getJson("/api/demo/library?provider=APPLE_MUSIC", session)).hasSize(1);
     }
 
@@ -343,6 +376,7 @@ class DemoMigrationFlowTest {
         MusicProvider target = mock(MusicProvider.class);
         ProviderRegistry registry = mock(ProviderRegistry.class);
         ConnectionService connections = mock(ConnectionService.class);
+        MigrationHistory history = mock(MigrationHistory.class);
         ProviderConnection targetConnection = new ProviderConnection(ProviderId.APPLE_MUSIC,
                 ConnectionMode.DEMO, "demo", Map.of());
         Track firstSource = Track.of("source-0", "Song A", "Artist", "Album", 180);
@@ -362,40 +396,41 @@ class DemoMigrationFlowTest {
         when(target.createPlaylist(eq(targetConnection), anyString(), anyString())).thenReturn(created);
         try (var executor = Executors.newSingleThreadExecutor()) {
             MigrationService service = new MigrationService(registry, connections, new TrackMatcher(),
-                    new TuneBridgeProperties(), executor);
-            MigrationJob job = service.createJob(session, ProviderId.QQ_MUSIC, "source-url",
+                    new TuneBridgeProperties(), executor, history);
+            MigrationJob job = service.createJob(session, ownerId, ProviderId.QQ_MUSIC, "source-url",
                     ProviderId.APPLE_MUSIC, "name");
-            executor.submit(() -> {}).get(10, TimeUnit.SECONDS);
+            executor.submit(() -> { }).get(10, TimeUnit.SECONDS);
             assertThat(job.status()).isEqualTo(JobStatus.AWAITING_CONFIRMATION);
             verify(target, never()).createPlaylist(any(), anyString(), anyString());
             verify(target, never()).addTracks(any(), any(), any());
-            service.confirmJob(session, job.id(), List.of(1, 0));
-            executor.submit(() -> {}).get(10, TimeUnit.SECONDS);
+            service.confirmJob(session, ownerId, job.id(), List.of(1, 0));
+            executor.submit(() -> { }).get(10, TimeUnit.SECONDS);
             assertThat(job.status()).isEqualTo(JobStatus.COMPLETED);
             verify(source, times(1)).fetchPlaylist(null, "source-url");
             verify(target, times(1)).searchTracks(targetConnection, "Song A", "Artist", 6);
             verify(target, times(1)).searchTracks(targetConnection, "Song B", "Artist", 6);
             verify(target, times(1)).createPlaylist(eq(targetConnection), anyString(), anyString());
             verify(target).addTracks(targetConnection, created, List.of(firstTarget, secondTarget));
-            assertThatThrownBy(() -> service.confirmJob(session, job.id(), List.of(0)))
+            verify(history, org.mockito.Mockito.atLeastOnce()).save(any(MigrationJob.class));
+            assertThatThrownBy(() -> service.confirmJob(session, ownerId, job.id(), List.of(0)))
                     .isInstanceOf(ProviderException.class).hasMessageContaining("重复确认");
 
-            MigrationJob changed = service.createJob(session, ProviderId.QQ_MUSIC, "source-url",
+            MigrationJob changed = service.createJob(session, ownerId, ProviderId.QQ_MUSIC, "source-url",
                     ProviderId.APPLE_MUSIC, "name");
-            executor.submit(() -> {}).get(10, TimeUnit.SECONDS);
+            executor.submit(() -> { }).get(10, TimeUnit.SECONDS);
             CountDownLatch release = new CountDownLatch(1);
             executor.submit(() -> {
                 release.await(10, TimeUnit.SECONDS);
                 return null;
             });
             try {
-                service.confirmJob(session, changed.id(), List.of(0));
+                service.confirmJob(session, ownerId, changed.id(), List.of(0));
                 when(connections.get(session, ProviderId.APPLE_MUSIC)).thenReturn(new ProviderConnection(
                         ProviderId.APPLE_MUSIC, ConnectionMode.DEMO, "another", Map.of()));
             } finally {
                 release.countDown();
             }
-            executor.submit(() -> {}).get(10, TimeUnit.SECONDS);
+            executor.submit(() -> { }).get(10, TimeUnit.SECONDS);
             assertThat(changed.status()).isEqualTo(JobStatus.FAILED);
             assertThat(changed.error()).contains("目标连接已断开或更换");
             verify(target, times(1)).createPlaylist(eq(targetConnection), anyString(), anyString());
@@ -407,8 +442,8 @@ class DemoMigrationFlowTest {
     void allowsExplicitLowConfidenceSelectionButRejectsPrematureAndDuplicateNeteaseTargets() {
         ProviderConnection connection = new ProviderConnection(ProviderId.NETEASE_MUSIC,
                 ConnectionMode.DEMO, "demo", Map.of());
-        MigrationJob job = new MigrationJob("job", "session", ProviderId.QQ_MUSIC, ProviderId.NETEASE_MUSIC,
-                "source", "name", connection);
+        MigrationJob job = new MigrationJob("job", "session", ownerId, ProviderId.QQ_MUSIC,
+                ProviderId.NETEASE_MUSIC, "source", "name", connection, ignored -> { });
         Track source = Track.of("source", "Song (Live)", "Artist", "Album", 180);
         Track target = new Track("encrypted", "Song", "Artist", "Album", 180, "artwork", 7);
         assertThatThrownBy(() -> job.confirm(List.of(0))).isInstanceOf(ProviderException.class)
@@ -454,7 +489,8 @@ class DemoMigrationFlowTest {
         for (int attempt = 0; attempt < 240; attempt++) {
             job = getJson("/api/migrations/" + jobId, session);
             String status = job.path("status").asText();
-            if ("AWAITING_CONFIRMATION".equals(status) || "COMPLETED".equals(status) || "FAILED".equals(status)) {
+            if ("AWAITING_CONFIRMATION".equals(status) || "COMPLETED".equals(status) || "FAILED".equals(status)
+                    || "INTERRUPTED".equals(status)) {
                 return job;
             }
             Thread.sleep(50);
@@ -463,17 +499,17 @@ class DemoMigrationFlowTest {
     }
 
     private JsonNode postJson(String path, MockHttpSession session, Object body) throws Exception {
-        MvcResult result = mvc.perform(post(path)
-                        .session(session)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(body)))
+        MvcResult result = mvc.perform(BridgeRequests.as(
+                        BridgeRequests.post(path).session(session)
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content(objectMapper.writeValueAsString(body)), principal))
                 .andExpect(status().is2xxSuccessful())
                 .andReturn();
         return readBody(result);
     }
 
     private JsonNode getJson(String path, MockHttpSession session) throws Exception {
-        MvcResult result = mvc.perform(get(path).session(session))
+        MvcResult result = mvc.perform(BridgeRequests.as(BridgeRequests.get(path).session(session), principal))
                 .andExpect(status().isOk())
                 .andReturn();
         return readBody(result);
