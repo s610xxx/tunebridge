@@ -304,6 +304,13 @@
         if (!authReady && !authBusy) refreshAuth().catch(() => {});
     }
 
+    function setAuthMode(mode) {
+        if (authBusy || auth.authenticated || (mode === 'register' && auth.registrationAllowed !== true)) return;
+        authMode = mode;
+        els.authStatus.textContent = '';
+        renderAuth();
+    }
+
     function requireLogin() {
         if (authBusy) {
             toast('正在处理音桥账号操作，请稍候', 'info');
@@ -2221,6 +2228,27 @@
             openModal(els.progressModal);
         });
 
+        els.accountBtn.addEventListener('click', () => openAuth());
+        els.authRefreshBtn.addEventListener('click', () => openAuth());
+        els.authLoginTab.addEventListener('click', () => setAuthMode('login'));
+        els.authRegisterTab.addEventListener('click', () => setAuthMode('register'));
+        els.authForm.addEventListener('submit', submitAuth);
+        els.logoutBtn.addEventListener('click', logout);
+        els.restoreCurrentBtn.addEventListener('click', loadSession);
+        els.openHistoryBtn.addEventListener('click', openHistory);
+        els.historyList.addEventListener('click', (event) => {
+            const button = event.target.closest('[data-history-id]');
+            if (button) {
+                loadHistoryDetail(button.dataset.historyId);
+            }
+        });
+        els.historyPrevBtn.addEventListener('click', () => loadHistory(Math.max(0, historyOffset - 20)));
+        els.historyNextBtn.addEventListener('click', () => loadHistory(historyOffset + 20));
+        els.historyBackBtn.addEventListener('click', () => loadHistory());
+        els.historyRetryBtn.addEventListener('click', () => {
+            if (historyDetailId) loadHistoryDetail(historyDetailId); else loadHistory();
+        });
+
         els.libraryTabs.addEventListener('click', (event) => {
             const tab = event.target.closest('[data-library-provider]');
             if (!tab) {
@@ -2312,8 +2340,12 @@
     async function init() {
         cacheElements();
         wireEvents();
-        await refreshState();
-        syncDirection();
+        await refreshAuth().catch(() => { });
+        if (authReady && auth.authenticated) {
+            await loadSession();
+        } else {
+            syncDirection();
+        }
     }
 
     init();
