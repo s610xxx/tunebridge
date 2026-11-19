@@ -58,6 +58,12 @@ public class DemoStore {
         }
     }
 
+    public void clear(String sessionId) {
+        synchronized (lock) {
+            sessions.remove(sessionId);
+        }
+    }
+
     private List<Playlist> playlists(String sessionId, ProviderId provider) {
         return sessions
                 .computeIfAbsent(sessionId, ignored -> new ConcurrentHashMap<>())

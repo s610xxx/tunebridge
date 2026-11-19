@@ -1,14 +1,16 @@
 # TuneBridge 音桥 · 技术方案
 
-> 版本：v1.0（MVP）｜更新日期：2026-11-18｜技术栈：Java 21 + Spring Boot 3.4 + 原生 Web
+> 版本：v1.1｜更新日期：2026-11-19｜技术栈：Java 21 + Spring Boot 3.4 + Spring Security + H2 + 原生 Web
 
 ## 1. 设计目标
 
-1. **一条主流程走通**：授权 → 粘贴链接 → 预览 → 迁移 → 报告。
+1. **一条主流程走通**：登录音桥账号 → 授权 → 粘贴链接 → 匹配 → 勾选确认 → 写入 → 报告。
 2. **真实适配器 + 演示降级**：真实 API 可用时走真实链路；没有凭据或接口受限时，仍能完整演示产品价值。
-3. **平台隔离**：QQ 与 Apple 的协议差异收敛在 Provider 适配层，迁移编排不感知平台细节。
-4. **凭据安全**：账号票据只存在服务端会话内存，不进数据库、不进日志。
-5. **可扩展**：新增网易云 / Spotify 只需实现 `MusicProvider`。
+3. **平台隔离**：QQ、Apple、网易云的协议差异收敛在 Provider 适配层，迁移编排不感知平台细节。
+4. **凭据安全**：音乐平台票据只存在服务端会话内存，不进数据库、不进日志；落盘的只有音桥账号与任务报告快照。
+5. **可恢复但不可自动重试**：任务状态与报告持久化，服务重启后如实标记中断，绝不自动继续写入。
+6. **部署边界可验证**：本机自用与公网多人访问是两套互斥配置，不合规直接拒绝启动。
+7. **可扩展**：新增 Spotify 等平台只需实现 `MusicProvider`。
 
 ## 2. 技术选型
 
@@ -18,28 +20,38 @@
 | 框架 | Spring Boot 3.4.2 | 内嵌 Tomcat、RestClient、Jackson、测试支持完善 |
 | HTTP 客户端 | Spring `RestClient` | 同步、类型化、超时配置简单 |
 | 前端 | 原生 HTML/CSS/JS | 无构建链、加载快、单文件易部署，黑客松效率最高 |
-| 会话 | `HttpSession` + 内存 | MVP 无账号体系；凭据不落库 |
-| 任务 | `ConcurrentHashMap` + 虚拟线程 | 迁移任务异步执行，前端轮询进度 |
-| 测试 | JUnit 5 + MockMvc | URL 解析、匹配算法、演示链路集成测试 |
+| 账号与安全 | Spring Security 6.4 | 表单登录、会话固定防护、CSRF、PBKDF2 编码器开箱可用 |
+| 持久化 | Spring JDBC + H2（file / mem） | 两张表足够；零外部依赖，测试用内存库即可复现 |
+| 会话 | `HttpSession`（cookie 跟踪）+ 内存凭据 | 平台票据不入库；退出或服务重启即失效 |
+| 任务 | `ConcurrentHashMap` + 虚拟线程 | 迁移任务异步执行，前端轮询进度，状态变更同步落库 |
+| 测试 | JUnit 5 + MockMvc + AssertJ + spring-security-test | URL 解析、匹配算法、演示链路、认证与边界、历史恢复 |
 | 构建 | Maven | 环境已具备 |
 
 ## 3. 总体架构
 
 ```mermaid
 flowchart LR
-    U[浏览器 SPA] -->|JSON / HttpSession| C[Web 层<br/>Controller + 异常处理]
+    U[浏览器 SPA] -->|JSON / HttpSession + CSRF| F[安全过滤器链<br/>边界 / 体积 / 登录守卫]
+    F --> C[Web 层<br/>Controller + 异常处理]
+    C --> AS[AccountService]
     C --> CS[ConnectionService]
     C --> MS[MigrationService]
     C --> DS[DemoStore]
+    MS --> MH[MigrationHistory]
     MS --> PR[ProviderRegistry]
     MS --> TM[TrackMatcher]
+    AS --> DB[(H2<br/>app_users)]
+    MH --> DB2[(H2<br/>migration_history)]
     PR --> QP[QqMusicProvider]
     PR --> AP[AppleMusicProvider]
+    PR --> NP[NeteaseMusicProvider]
     QP --> QC[QqMusicClient]
     AP --> AC[AppleMusicClient]
     AP --> AT[AppleDeveloperTokenService]
+    NP --> NC[NeteaseMusicClient]
     QC --> QQ[(QQ 音乐接口)]
     AC --> AM[(Apple Music API)]
+    NC --> NE[(本机 ncm-cli)]
     MS -. 轮询 .- U
 ```
 
@@ -47,19 +59,21 @@ flowchart LR
 
 ```
 web/          控制器、DTO、全局异常处理
-service/      连接管理、迁移编排、匹配算法
-provider/     MusicProvider SPI + QQ / Apple / Demo 实现
+security/     账号、过滤器链、部署策略、认证限流
+service/      连接管理、迁移编排、匹配算法、迁移历史
+provider/     MusicProvider SPI + QQ / Apple / 网易云 / Demo 实现
 domain/       领域模型（Track、Playlist、Connection、Job）
 config/       属性绑定、RestClient、线程池
 ```
 
-依赖方向：`web → service → provider → domain`。Provider 之间不互相依赖。
+依赖方向：`web → security / service → provider → domain`。`MigrationHistory` 是唯一持久化出口，`MigrationJob` 通过回调 `Consumer<MigrationJob>` 触发落库，Provider 之间不互相依赖。
 
 ## 4. 领域模型
 
 ```java
-enum ProviderId { QQ_MUSIC, APPLE_MUSIC }
+enum ProviderId { QQ_MUSIC, APPLE_MUSIC, NETEASE_MUSIC }
 enum ConnectionMode { DEMO, REAL }
+enum JobStatus { QUEUED, RUNNING, AWAITING_CONFIRMATION, COMPLETED, FAILED, INTERRUPTED }
 
 record ProviderConnection(
     ProviderId provider,
@@ -68,41 +82,64 @@ record ProviderConnection(
     Map<String, String> credentials // 仅服务端使用，绝不序列化
 ) {}
 
-record Track(
-    String providerTrackId,
-    String title,
-    String artist,
-    String album,
-    int durationSec,
-    String artworkUrl
-) {}
+record Track(String providerTrackId, String title, String artist, String album,
+             int durationSec, String artworkUrl, int songType) {}
 
-record Playlist(
-    String id, String name, String description,
-    String coverUrl, String owner, String webUrl,
-    List<Track> tracks
-) {}
+record Playlist(String id, String name, String description,
+                String coverUrl, String owner, String webUrl, List<Track> tracks) {}
 
-record CreatedPlaylist(String id, String name, String url, int trackCount) {}
+record CreatedPlaylist(String id, String name, String url, int trackCount,
+                       Map<String, String> metadata) {}
 
-class MigrationJob {
-    String id, sessionId;
-    ProviderId source, target;
-    JobStatus status;          // QUEUED / RUNNING / COMPLETED / FAILED
-    int progress;              // 0..100
-    String currentStep;
-    List<LogEntry> logs;       // 线程安全
-    List<TrackMatch> matches;
-    CreatedPlaylist result;
-    String error;
+record TrackMatch(Track source, boolean matched, boolean lowConfidence,
+                  String targetTitle, String targetArtist, String targetAlbum,
+                  String targetArtworkUrl, double score, String note) {}
+
+class MigrationJob {                       // 可变、synchronized，状态变更即 checkpoint()
+    String id, sessionId, ownerId;         // ownerId = 音桥账号 ID
+    ProviderId sourceProvider, targetProvider;
+    String sourceUrl, requestedName;
+    ConnectionMode targetMode;
+    ProviderConnection targetConnection;   // 终态后释放
+    JobStatus status; int progress; String currentStep;
+    List<LogEntry> logs; List<TrackMatch> matches; Map<Integer, Track> targets;
+    List<Integer> selectedIndices;         // 确认勾选的匹配序号（来源顺序）
+    Playlist sourcePlaylist;
+    CreatedPlaylist createdTarget, result;
+    String error, recoveryNotice;
+    boolean writeStarted;                  // 是否已进入写入阶段
+    void checkpoint();                     // 每次状态变更落库；落库异常 -> 转 Snapshot 只读降级并 INTERRUPTED
 }
+
+record Snapshot(String jobId, String ownerId, int progress, String currentStep,
+                List<TrackMatch> matches) {          // 落库失败后的内存降级形态（只读，不再写库）
+    MigrationJob toJob(...);
+}
+
+// web/dto/JobView.java
+record JobView(String id, String status, int progress, String currentStep, SourceView source,
+               TargetView target, List<LogEntry> logs, List<MatchView> matches, ResultView result,
+               String error, String createdAt,
+               boolean readOnly, String recoveryNotice,
+               CreatedTargetView createdTarget) {     // 唯一入库（CLOB JSON）与出参形态
+    JobView asReadOnly();
+    JobView interruptedAfterRestart(boolean writeStarted);
+}
+
+record AppUser(String id, String username, String passwordHash, Instant createdAt) {}
 ```
+
+- `JobView` 是**唯一入库的表示**：`migration_history.snapshot` 存它的 JSON，读取一律 `readOnly=true`，不含平台凭据、不含 `ProviderConnection`。
+- `writeStarted` 决定恢复文案：写入阶段中断 → 「结果待核查，勿自动重试」；未写入 → 「任务已中断，请重新连接并匹配」。
+- `MigrationJob.confirm(indices)` 只接受 `AWAITING_CONFIRMATION` 状态、去重且已匹配的序号；网易云目标额外拒绝重复曲目。
 
 ## 5. Provider SPI
 
 ```java
 public interface MusicProvider {
     ProviderId id();
+
+    String sampleUrl();                          // 前端「一键填充」用的示例链接
 
     ProviderConnection connectDemo(String sessionId);
 
@@ -116,35 +153,48 @@ public interface MusicProvider {
     CreatedPlaylist createPlaylist(ProviderConnection connection,
                                    String name, String description);
 
-    void addTracks(ProviderConnection connection,
-                   String playlistId, List<Track> tracks);
+    void addTracks(ProviderConnection connection, CreatedPlaylist playlist, List<Track> tracks);
 }
 ```
 
 - 真实与演示由 `connection.mode()` 分流；真实连接为 `null`（如 QQ 公开只读）时，适配器只做匿名读取。
 - `searchTracks` 返回的 `Track.providerTrackId` 是**目标平台可写入的 ID**（QQ 数字 songId / Apple catalog song id）。
-- 适配器内部负责分批、限速、响应码校验、错误翻译。
+- 适配器内部负责分批、限速、响应码校验、错误翻译；`addTracks` 之后由编排层回读校验（网易云）。
+- 网易云不支持作为来源：`fetchPlaylist()` 直接抛 `INVALID_INPUT`，编排层再限制「QQ → 网易云」。
 
 ## 6. 接口设计
 
-统一前缀 `/api`，同源 Cookie 会话。错误格式：
+统一前缀 `/api`，同源 Cookie 会话，**除注册/登录外全部需要音桥账号**。错误格式：
 
 ```json
 { "error": "面向用户的中文提示", "code": "PROVIDER_UNAUTHORIZED" }
 ```
 
+### 6.1 端点
+
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/state` | 当前会话连接状态 + 服务端能力（Apple 令牌是否配置） |
-| POST | `/api/connections/{provider}` | 建立连接，body：`{mode:"demo"}` 或 `{mode:"real", cookie? / musicUserToken?}` |
+| GET | `/api/auth` | 当前账号状态，并下发 CSRF 令牌：`{authenticated, username, csrfToken, csrfHeader, registrationAllowed, registrationCodeRequired, mode}` |
+| POST | `/api/auth/register` | 注册音桥账号，body：`{username, password, registrationCode?}` |
+| POST | `/api/auth/login` | 表单登录（`username` / `password`），成功后更换会话 ID |
+| POST | `/api/auth/logout` | 退出：失效会话、清除演示库与活动任务、删除 `JSESSIONID` |
+| GET | `/api/state` | 本会话连接状态 + 服务端能力（Apple 令牌、部署模式、网易云可用性） |
+| GET | `/api/config` | 前端配置：Apple 开发者令牌（可公开）、示例链接 |
+| POST | `/api/connections/{provider}` | 建立连接，body：`{mode:"demo"}` 或 `{mode:"real", cookie? / musicUserToken? / pairingCode?}` |
 | DELETE | `/api/connections/{provider}` | 断开并清除凭据 |
 | POST | `/api/playlists/preview` | 解析并预览，body：`{provider, url}` |
-| POST | `/api/migrations` | 创建迁移任务，body：`{sourceProvider, sourceUrl, targetProvider, playlistName?}` |
-| GET | `/api/migrations/{id}` | 查询任务进度、日志、报告 |
+| POST | `/api/playlists/backup` | 只读备份（抓取曲目清单，不创建目标歌单） |
+| POST | `/api/migrations` | 创建匹配预览，body：`{sourceProvider, sourceUrl, targetProvider, playlistName?}` |
+| GET | `/api/migrations` | 本账号迁移历史分页（`offset` / `limit`，倒序，只读） |
+| GET | `/api/migrations/current` | 本会话活动任务，用于刷新页面后恢复 |
+| GET | `/api/migrations/{id}` | 活动任务快照；本账号已结束的任务回落到历史（`readOnly=true`） |
+| POST | `/api/migrations/{id}/confirm` | 勾选确认并写入，body：`{"selectedIndices":[0,2,5]}`（整数序号） |
+| POST | `/api/migrations/{id}/abandon` | 放弃未确认的预览 |
 | GET | `/api/demo/library?provider=QQ_MUSIC` | 演示模式下本次会话创建的歌单 |
-| GET | `/api/config` | 前端配置：Apple 开发者令牌（可公开）、示例链接 |
 
-### 6.1 连接状态响应
+写请求必须带 CSRF 头；未登录返回 401 `AUTH_REQUIRED`，越权读取他人任务返回 404 `NOT_FOUND`，请求体上限 64 KB（超限 413），`/api/auth*` 另有按来源与全局窗口限流（超限 429 + `Retry-After: 60`）。
+
+### 6.2 连接状态响应
 
 ```json
 {
@@ -157,20 +207,52 @@ public interface MusicProvider {
 }
 ```
 
-### 6.2 迁移任务响应
+### 6.3 迁移任务快照
+
+活动任务与历史条目共用 `JobView`，前端只轮询一个结构（示例为等待确认阶段）：
 
 ```json
 {
   "id": "mig_xxx",
-  "status": "RUNNING",
-  "progress": 62,
-  "currentStep": "正在匹配第 8 / 12 首",
+  "status": "AWAITING_CONFIRMATION",
+  "progress": 74,
+  "currentStep": "匹配完成，等待勾选确认",
+  "source": { "provider": "QQ_MUSIC", "providerLabel": "QQ 音乐", "name": "夏夜循环", "coverUrl": "...", "owner": "阿桥", "trackCount": 12 },
+  "target": { "provider": "APPLE_MUSIC", "providerLabel": "Apple Music", "mode": "DEMO" },
   "logs": [{ "at": "12:01:03", "message": "已读取来源歌单《夏夜循环》", "level": "INFO" }],
-  "matches": [],
+  "matches": [{ "index": 0, "selected": false, "title": "晴天", "artist": "周杰伦", "album": "叶惠美",
+                 "durationSec": 269, "matched": true, "lowConfidence": false,
+                 "targetTitle": "晴天", "targetArtist": "周杰伦", "targetAlbum": "叶惠美",
+                 "targetArtworkUrl": "...", "score": 91, "note": "标题与歌手一致" }],
   "result": null,
-  "error": null
+  "error": null,
+  "createdAt": "2026-11-19T04:01:00Z",
+  "readOnly": false,
+  "recoveryNotice": null,
+  "createdTarget": { "playlistId": "demo-1", "playlistName": "夏夜循环", "playlistUrl": "demo://playlist/demo-1" }
 }
 ```
+
+- `matches[].index` 即确认接口使用的序号；`score` 是四舍五入后的百分数；`selected` 表示已写入勾选。
+- `result` 为 `COMPLETED` 后的统计（`addedCount` / `unmatchedCount` / `skippedCount` / `matchedCount` / `totalCount` / `matchRate` / 目标歌单三件套）。
+- `readOnly=true` 的响应没有确认与放弃入口；历史条目全部走这个形态。
+
+历史条目与重启恢复的示例：
+
+```json
+{
+  "id": "mig_xxx",
+  "status": "INTERRUPTED",
+  "progress": 74,
+  "currentStep": "任务已中断",
+  "readOnly": true,
+  "recoveryNotice": "服务重启，任务已中断；未开始写入目标平台。请重新登录、连接并匹配，未确认预览不会自动恢复。",
+  "createdTarget": null,
+  "result": null
+}
+```
+
+`GET /api/migrations?offset=0&limit=20` 返回 `{ "items": [JobView...], "offset": 0, "hasMore": true }`，按 `createdAt` 倒序，只包含当前登录账号的任务。
 
 ## 7. 关键时序
 
@@ -187,11 +269,11 @@ sequenceDiagram
     P->>API: GET /v1/me/storefront（Bearer dev + Music-User-Token）
     API-->>P: 200 {storefront:"cn"}
     P-->>S: ProviderConnection
-    S->>S: 写入 HttpSession（内存）
+    S->>S: 写入 HttpSession（内存，凭据不落盘）
     S-->>B: 脱敏连接信息
 ```
 
-### 7.2 迁移任务
+### 7.2 匹配 → 确认 → 写入
 
 ```mermaid
 sequenceDiagram
@@ -199,27 +281,34 @@ sequenceDiagram
     participant S as MigrationService
     participant A as 来源 Provider
     participant T as 目标 Provider
-    participant M as TrackMatcher
+    participant H as MigrationHistory(H2)
     B->>S: POST /api/migrations
-    S->>S: 创建 Job，提交虚拟线程
-    S-->>B: {jobId}
+    S->>S: 创建 Job(ownerId, sessionId)，提交虚拟线程
+    S->>H: checkpoint QUEUED
+    S-->>B: {id}
     S->>A: fetchPlaylist(url)
-    A-->>S: Playlist(tracks)
+    S->>H: checkpoint RUNNING
     loop 每首来源歌曲
         S->>T: searchTracks(title, artist)
-        T-->>S: 候选列表
-        S->>M: best(source, candidates)
-        M-->>S: 匹配分与目标曲目
-        S->>S: 更新进度/日志
+        S->>S: TrackMatcher 打分，写入 matches / logs
     end
-    S->>T: createPlaylist(name)
-    T-->>S: targetPlaylistId
-    S->>T: addTracks(batches)
-    T-->>S: 写入结果
-    S->>S: Job = COMPLETED + report
+    S->>H: checkpoint AWAITING_CONFIRMATION
     B->>S: GET /api/migrations/{id}（轮询）
-    S-->>B: 进度 / 结果
+    S-->>B: 逐首匹配报告（此时仍未写入任何平台）
+    B->>S: POST /api/migrations/{id}/confirm {selectedIndices}
+    S->>S: writeStarted = true
+    S->>T: createPlaylist(name)
+    S->>H: checkpoint（含 createdTarget）
+    S->>T: addTracks(batches)
+    S->>H: checkpoint COMPLETED + report
+    B->>S: POST /api/auth/logout
+    S->>H: checkpoint INTERRUPTED（已终态则保持不变）
 ```
+
+服务重启时的恢复逻辑（`MigrationHistory.recoverInterrupted()`，`@PostConstruct`）：
+把库里仍处于 `QUEUED` / `RUNNING` / `AWAITING_CONFIRMATION` 的行改写为 `INTERRUPTED`，并按 `write_started`
+生成「结果待核查，勿自动重试」或「任务已中断，请重新匹配」两种提示。**绝不自动继续或重新写入。**
+会话正常结束时 `sessionDestroyed` 监听器同样把该会话的活动任务收敛成终态历史。
 
 ## 8. QQ 音乐接入
 
@@ -377,7 +466,18 @@ GET /v1/catalog/{storefront}/search?term={title artist}&types=songs&limit=5
 
 取 `results.songs.data[]`，映射为候选。请求间隔 120ms，避免触发限流；单次迁移默认上限 200 首。
 
-## 10. 歌曲匹配算法
+## 10. 网易云接入（试用 · 仅本机）
+
+网易云没有可用的公开写接口，MVP 用**本机 `ncm-cli` 子进程**打通「QQ 音乐 → 网易云」这一个方向，作为可部署形态之前的试用能力。
+
+- **只作目标平台**：`fetchPlaylist()` 直接返回 400「网易云音乐暂不支持作为来源平台」；`MigrationService` 也只放行「来源 QQ → 目标网易云」。
+- **配对码连接**：`POST /api/connections/NETEASE_MUSIC {mode:"real", pairingCode}` → `NeteaseLocalAccess.authorize()` 用 `MessageDigest.isEqual` 定长比对配置里的 `tunebridge.netease.pairing-code`（`[A-Za-z0-9_-]{32,128}`），通过后签发一个随机 grant 存入会话；随后 `client.validateLogin()` 失败即回收 grant。
+- **grant 而非凭据**：会话里保存的是 32 字节随机 grant，网易云登录态由 CLI 自己管理（属本机数据），服务端不接触 Cookie / 密码。断开连接或退出登录即 `revoke(grant)`。
+- **CLI 调用**：`node <cli-entry> search song|playlist create|playlist add|playlist tracks … --output=json`，参数经转义后由 `ProcessBuilder` 启动（丢弃 stderr、超时强制销毁进程），响应逐层校验后翻译成领域模型；每批加歌同样受 200 首上限约束。
+- **本机边界**：配置了配对码才启用 `NeteaseLocalGuard` 过滤器——要求回环地址、`Host` 与本地端口一致、写请求 `Origin` 同源、无转发头、非 `cross-site`，否则 403。`server.address` 非 `127.0.0.1` 或开启转发头处理时启动失败；PUBLIC 模式配置网易云相关键值同样拒绝启动。
+- **目标去重**：`MigrationJob.confirm()` 对网易云目标额外拒绝同一批里重复的曲目，避免 CLI 端产生重复行。
+
+## 11. 歌曲匹配算法
 
 ```java
 score = 0.55 * titleSimilarity + 0.35 * artistSimilarity + 0.10 * albumBonus
@@ -392,126 +492,216 @@ score = 0.55 * titleSimilarity + 0.35 * artistSimilarity + 0.10 * albumBonus
 
 匹配结果全部保留，用户能看到「为什么匹配到这首」。
 
-## 11. 演示模式
+## 12. 演示模式
 
 - `DemoCatalog`：内置 QQ 风格歌单（12 首）与 Apple 风格歌单（10 首），覆盖中英文、Live 版本、目标缺失歌曲。
 - `DemoStore`：按 `sessionId + provider` 保存迁移创建的歌单，线程安全。
 - `demo://builtin`：读取内置歌单；`demo://library/{id}`：读取本会话创建的演示歌单。
 - 演示适配器执行与真实链路相同的匹配、创建、写入流程，只是不发外部请求。
 - 迁移报告中的目标链接为 `demo://playlist/{id}`，前端识别后打开「演示音乐库」。
+- 演示连接与演示库绑定音桥账号的浏览器会话：退出登录或会话销毁即清除，迁移报告仍存入该账号的历史。
+- 网易云只在 LOCAL 部署提供演示模式（本机配对与 CLI 登录态属本机数据），PUBLIC 配置直接拒绝启动。
 
-## 12. 安全设计
+## 13. 安全设计
+
+### 13.1 账号与会话
+
+- **音桥账号**：`app_users` 只存 `id / username / PBKDF2 哈希`（`Pbkdf2PasswordEncoder.defaultsForSpringSecurity_v5_8`）。用户名限 `[A-Za-z0-9_]{3,32}` 并统一小写，密码 12–128 字符；重名与弱输入统一返回 `REGISTRATION_FAILED`，不泄露账号是否存在。
+- **登录**：Spring Security 表单登录 `POST /api/auth/login`（`username` / `password` 表单字段），成功后 `sessionFixation().changeSessionId()` 防会话固定；失败统一 401 `LOGIN_FAILED`。
+- **退出**：`POST /api/auth/logout` 失效会话、清除认证、删除 `JSESSIONID`；`HttpSessionListener` 在会话销毁时结束该会话的活动任务并清空演示库。
+- **PUBLIC 注册门槛**：注册码 32–128 字符，`MessageDigest.isEqual` 定长比较；LOCAL 免邀请码。
+
+### 13.2 过滤器链顺序
+
+| 顺序 | 过滤器 | 职责 |
+| --- | --- | --- |
+| 1 | `HeaderWriterFilter` | 先写安全响应头，保证被拒绝的请求同样带 CSP / `X-Frame-Options` / `Referrer-Policy` / `Cache-Control: no-store` |
+| 2 | `BoundaryFilter` | 调用 `DeploymentPolicy.allows()`，不合规 403 `BOUNDARY_REJECTED`；`/api/auth*` 走 `AuthRateLimiter`（默认每来源 60 次/分钟、全局 2000 次、最多 4096 个来源），超限 429 `RATE_LIMITED` + `Retry-After: 60` |
+| 3 | `ApiBodyLimitFilter` | `/api/**` 写请求体上限 64 KB（超限 413），拒绝非 `identity` 编码（415）；请求体与查询串限量解析（≤128 个参数、查询串 ≤8192 字符），包装成可重复读的请求 |
+| 4 | `CsrfFilter` / `LogoutFilter` | Spring Security 内建 CSRF 校验与退出 |
+| 5 | `LoginGuardFilter` → `UsernamePasswordAuthenticationFilter` | 已登录不得再登录（409）；表单字段数量、用户名与密码长度先做形式校验（401），不泄露原因 |
+
+自定义过滤器都在 `SecurityConfiguration` 内构造后用 `addFilterAfter` / `addFilterBefore` 注册，不声明成 Servlet `Filter` Bean——避免被 Servlet 容器二次注册而执行两次。
+
+### 13.3 授权与数据隔离
 
 | 面 | 措施 |
 | --- | --- |
-| 凭据存储 | 仅 `HttpSession` 内存；不落库、不写日志、不返回前端 |
-| 日志脱敏 | 只打印 provider、账号掩码、任务 ID；异常信息裁剪 Cookie/Token |
-| SSRF | 不请求用户传入的任意 URL；只解析出平台 ID 后调用固定域名 |
-| 会话隔离 | Job 绑定 `sessionId`，查询时校验；演示库同样按会话隔离 |
-| 跨站 | 不开启 CORS；会话 Cookie `HttpOnly`、`SameSite=Lax`；JSON 接口只接受 `application/json` |
-| 传输 | 生产部署强制 HTTPS（反向代理） |
-| 输入 | 链接严格正则；歌单名长度限制 40；曲目数上限 200 |
+| 端点授权 | `STATIC_PATHS` 与 `GET /api/auth` + `POST /api/auth/login|register` 放行，`/api/**` 一律需认证，其余 `denyAll()` |
+| CSRF | `HttpSessionCsrfTokenRepository` + `XorCsrfTokenRequestAttributeHandler`，前端从 `GET /api/auth` 取令牌并用 `X-CSRF-TOKEN` 头提交；校验失败 403 `CSRF_INVALID` |
+| 跨站 | 不开启 CORS（`cors().disable()`）；`Origin` / `Sec-Fetch-Site` 由 `BoundaryFilter` 校验；会话 Cookie `HttpOnly` + `SameSite=Lax`（PUBLIC 再加 `Secure`） |
+| 账号隔离 | Job 同时绑定 `ownerId` 与 `sessionId`：跨账号读取 404，同账号跨会话只读（409 `MIGRATION_STATE`）；一个账号同时只允许一个未结束任务，全局最多 16 个 |
+| 历史 | `migration_history` 按 `owner_id` 查询，`snapshot` 是 `readOnly=true` 的 `JobView`；无更新/删除接口，确认与放弃一律 409 `HISTORY_READ_ONLY` |
+| 凭据存储 | 平台票据只存 `HttpSession` 内存；不落库、不写日志、不返回前端；任务终态后释放 `ProviderConnection` |
+| 日志与序列化 | 只打印 provider、账号掩码、任务 ID；`ConnectRequest.toString()` 不含 Cookie/Token 字段值 |
+| SSRF | 不请求用户传入的任意 URL；先用正则解析出平台 ID，再调用固定域名 |
+| 输入 | 链接严格正则；歌单名去控制符后限长 60；单次曲目上限 200；分页参数 `0 ≤ offset ≤ 100000`、`1 ≤ limit ≤ 50` |
 | 写操作 | 只创建新歌单，不修改/删除用户已有歌单；不写入「我喜欢」 |
+| 本机能力 | 网易云走本机 `ncm-cli` 子进程，仅 LOCAL + 配对码，PUBLIC 配置该项直接拒绝启动 |
+| 传输 | PUBLIC 模式强制**应用原生 TLS**（`server.ssl.enabled=true`），`forward-headers-strategy` 必须为 `none`，不支持反向代理 |
 
-## 13. 配置与部署
+`BoundaryFilter` 与 `DeploymentPolicy` 的完整边界规则见 §14.1；两者都在启动时校验配置，不合规直接拒绝启动。
+
+## 14. 配置与部署
+
+### 14.1 两种互斥的部署模式
+
+`tunebridge.security.mode` 取 `local`（默认）或 `public`，`DeploymentPolicy` 构造时校验：
+
+| 模式 | 启动前置条件 | 请求边界 |
+| --- | --- | --- |
+| LOCAL | `server.address=127.0.0.1`、`server.forward-headers-strategy=none`；注册免邀请码；允许网易云配对 | 拒绝一切 `Forwarded` / `X-Forwarded-*` / `X-Real-IP`；`Host` 必须唯一且是 `localhost`/`127.0.0.1`/`[::1]`（可带真实端口）；远端与本端地址必须是回环字面量（不做 DNS）；写请求的 `Origin` 必须等于本次请求自身的 scheme+Host，且拒绝 `Sec-Fetch-Site: cross-site` |
+| PUBLIC | `server.ssl.enabled=true`、`server.servlet.session.cookie.secure=true`、规范公网源 `https://host[:port]`（小写、无路径/查询/凭证/片段、端口非 443 时才写）、注册码 32–128 字符、禁止网易云配置 | `Host` 必须等于规范源的 authority 且连接必须是 HTTPS，其余同上（`Origin` 与规范源比对） |
+
+LOCAL 就是「这台电脑上的自己用」：不监听公网地址、不接受代理转发的头部，因此不存在被伪造来源绕过授权的路径；PUBLIC 是「多人访问」：TLS 与会话 Cookie 安全位由应用自己保证，注册靠邀请码收口。
+
+### 14.2 配置项
 
 ```yaml
 server:
-  port: 8080
+  address: ${SERVER_ADDRESS:127.0.0.1}
+  port: ${PORT:8080}
+  forward-headers-strategy: none
   servlet:
     session:
       timeout: 2h
-      cookie:
-        http-only: true
-        same-site: lax
+      persistent: false
+      cookie: { http-only: true, same-site: lax, secure: ${SESSION_COOKIE_SECURE:false} }
+
+spring:
+  datasource:
+    url: "${TUNEBRIDGE_DATABASE_URL:jdbc:h2:file:./data/tunebridge;DB_CLOSE_ON_EXIT=FALSE;WRITE_DELAY=0}"
 
 tunebridge:
+  security:
+    mode: ${TUNEBRIDGE_SECURITY_MODE:local}
+    public-origin: ${TUNEBRIDGE_PUBLIC_ORIGIN:}
+    registration-code: ${TUNEBRIDGE_REGISTRATION_CODE:}
   apple:
     developer-token: ${APPLE_DEVELOPER_TOKEN:}
     team-id: ${APPLE_TEAM_ID:}
     key-id: ${APPLE_KEY_ID:}
     private-key-path: ${APPLE_PRIVATE_KEY_PATH:}
-    default-storefront: cn
-  migration:
-    max-tracks: 200
-    batch-size: 100
-    request-interval-ms: 120
-  demo:
-    enabled: true
+    default-storefront: ${APPLE_STOREFRONT:cn}
+  netease:            # 仅 LOCAL 模式可用
+    pairing-code: ${NETEASE_PAIRING_CODE:}
+    node-executable: ${NETEASE_NODE_EXECUTABLE:}
+    cli-entry: ${NETEASE_CLI_ENTRY:}
+  migration: { max-tracks: 200, batch-size: 100, request-interval-ms: 120 }
+  demo: { enabled: true }
 ```
 
-- 本地：`mvn spring-boot:run` → `http://localhost:8080`。
-- 生产：`mvn clean package` → `java -jar target/tunebridge-1.0.0.jar`；Nginx 反代 + HTTPS。
-- 无数据库、无外部中间件，单实例即可运行；多实例部署时需把会话粘滞或改 Redis 会话（P2）。
-- 比赛要求的 Qoder Sites 适合托管**纯静态前端**；Java 后端建议部署在 Railway / Render / 阿里云 ECS，再将前端 API 基址指向后端，或直接使用服务器公网地址。
+### 14.3 数据库
 
-## 14. 错误处理
+`schema.sql` 在启动时幂等建表（`spring.sql.init.mode=always`）：
 
-| 场景 | HTTP | 用户提示 |
-| --- | --- | --- |
-| 未连接目标 | 409 | 请先连接目标音乐平台 |
-| Cookie 缺 uin/票据 | 400 | Cookie 不完整，请重新复制 y.qq.com 的完整 Cookie |
-| Apple 未配置开发者令牌 | 503 | 服务端未配置 Apple 开发者令牌，请先使用演示模式 |
-| Apple 401 | 401 | Apple 授权已过期，请重新授权 |
-| 歌单链接不合法 | 400 | 无法识别歌单链接，请粘贴完整分享链接 |
-| 歌单不存在/私有 | 404 | 歌单不存在或不可访问，请确认是公开歌单 |
-| 上游超时 | 504 | 平台响应超时，请稍后重试 |
-| QQ 写接口业务错误 | 502 | QQ 拒绝了写入（业务码 X），请使用演示模式或稍后重试 |
-| 未捕获异常 | 500 | 迁移失败，已记录任务 ID，请重试 |
+- `app_users(id, username UNIQUE, password_hash, created_at)`
+- `migration_history(id, owner_id → app_users.id, status, write_started, snapshot CLOB, created_at, updated_at)`
+  + 索引 `(owner_id, created_at DESC, id)`，支撑倒序分页。
 
-前端统一解析 `{error, code}`，以 Toast + 行内提示呈现，不使用 `alert`。
+`snapshot` 存 `JobView` JSON，读取即历史。默认使用 `./data/` 下的 H2 文件库（已在 `.gitignore` 中），**测试一律用 `jdbc:h2:mem:`**，不会写入本地数据目录。
 
-## 15. 测试计划
+### 14.4 运行
 
-### 15.1 单元测试
+- 本机：`mvn spring-boot:run` → `http://localhost:8080`。
+- 公网：配置 `TUNEBRIDGE_SECURITY_MODE=public`、证书、注册码等环境变量后 `java -jar target/tunebridge-1.0.0.jar`；**不要用反向代理**（转发头会被 `DeploymentPolicy` 拒绝）。
+- 单实例内存任务 + 文件库；多实例需要共享会话与 PostgreSQL（P2），Qoder Sites 仍只适合托管纯静态前端。
 
-- QQ 歌单链接解析（多种链接、非法输入）。
-- Apple 歌单链接解析（目录/资料库、带地区、带查询参数）。
-- `g_tk` 计算与 Cookie 解析（uin 前缀、票据优先级）。
-- 匹配算法：完全相同、Live 版本、多歌手、完全不同、空值。
-- 歌名归一化：全角、大小写、标点、feat.
+## 15. 错误处理
 
-### 15.2 集成测试
+`ProviderException` 统一携带 HTTP 状态、`code` 与中文提示，`ApiExceptionHandler` 直接转成 `{error, code}`；安全过滤器由 `SecurityResponses` 输出同一种结构。
 
-- 演示模式 QQ → Apple：连接、预览、迁移、报告、演示库。
-- 演示模式 Apple → QQ：同上。
-- 未连接目标时迁移返回 409。
-- 非法链接返回 400。
-- 任务会话隔离：其他会话无法查询任务。
+| 场景 | HTTP | `code` | 用户提示 |
+| --- | --- | --- | --- |
+| 未登录访问任何业务接口 | 401 | `AUTH_REQUIRED` | 请先登录音桥账号 |
+| 账号或密码错误 | 401 | `LOGIN_FAILED` | 账号或密码不正确（不泄露是否存在） |
+| 已登录又发起登录 | 409 | `LOGOUT_REQUIRED` | 请先退出当前账号后再登录 |
+| 缺少 / 错误 CSRF 头 | 403 | `CSRF_INVALID` | 安全令牌已失效，请刷新后手动重试；不会自动重发写入 |
+| 来源、Host、转发头不合规 | 403 | `BOUNDARY_REJECTED` | 请求来源不受信任 |
+| 登录/注册超频 | 429 | `RATE_LIMITED` | 请求过于频繁，请稍后再试（带 `Retry-After`） |
+| 请求体过大 / 编码不支持 | 413 / 415 | `REQUEST_TOO_LARGE` / 其他 | 请求内容过大 / 不受支持 |
+| 注册输入不合规或重名 | 400 | `REGISTRATION_FAILED` | 无法注册，请检查用户名、密码或邀请码 |
+| 未连接目标或来源平台 | 409 | `NOT_CONNECTED` | 请先连接目标音乐平台 |
+| 已有未结束任务 | 409 | `ACTIVE_JOB` | 已有未结束的任务，请回原会话处理 |
+| 状态不允许（重复确认/放弃） | 409 | `MIGRATION_STATE` | 任务已不属于当前会话，或不在等待确认状态 |
+| 会话内连接与任务快照不一致 | 409 | `TARGET_CHANGED` | 目标平台连接已变化，请重新匹配 |
+| 只读历史 | 409 | `HISTORY_READ_ONLY` | 历史任务只读，不会重新执行写入 |
+| Cookie 缺 uin/票据、配对码错误、Apple 401 | 401 | `UNAUTHORIZED` | 授权已失效，请重新连接 |
+| 未配置 Apple 令牌 / 网易云本机模式 | 503 | `NOT_CONFIGURED` | 服务端未配置，请先使用演示模式 |
+| 链接非法、JSON 无法解析、分页越界、曲目 ID 非整数 | 400 | `INVALID_INPUT` / `INVALID_JSON` | 无法识别歌单链接 / 请检查输入 |
+| 任务不存在或不属于本账号 | 404 | `NOT_FOUND` | 迁移任务不存在 |
+| 平台业务码拒绝写入 | 502 | `UPSTREAM_ERROR` | 平台拒绝了本次写入，请使用演示模式或稍后重试 |
+| 上游超时 | 504 | （适配器翻译） | 平台响应超时，请稍后重试 |
+| 未捕获异常 | 500 | `INTERNAL_ERROR` | 服务暂时不可用，请稍后重试 |
 
-### 15.3 人工验收
+前端统一解析 `{error, code}`，以 Toast + 行内提示呈现，不使用 `alert`；401 时清空页面私有数据并打开账号弹窗，且不自动重放刚才的写操作。
 
-- Chrome / Edge / Safari 桌面端 + 375px 移动端。
-- 核心流程 ≤ 5 步、无控制台错误。
-- 真实 QQ 公开歌单读取（联网）。
-- 未配置 Apple 令牌时的降级提示。
+## 16. 测试计划
 
-## 16. 已知限制与后续演进
+共 **79 项 JUnit 测试 + 7 项 Node 测试**，`mvn test` 全绿。所有触达数据库的测试都固定 `spring.datasource.url=jdbc:h2:mem:<name>;DB_CLOSE_DELAY=-1`，不写本地 `./data/`。
+
+### 16.1 单元与适配器测试
+
+- `QqUrlParserTest` / `AppleUrlParserTest`：多种链接形式、地区与查询参数、非法输入。
+- `QqCookieTest`：`g_tk` 计算、uin 前缀剥离、票据优先级。
+- `TrackMatcherTest`：完全相同、Live 版本、多歌手、完全不同、空值、归一化。
+- `NeteaseLocalAccessTest` / `NeteaseMusicClientTest` / `NeteaseMusicProviderTest`：配对码校验与 grant 生命周期、CLI 参数与响应解析、只作目标平台。
+- `AuthRateLimiterTest`：注入时钟验证按来源窗口、全局限流与来源数量上限。
+- `ConnectionServiceTest`：退出即清除凭据。
+
+### 16.2 安全与持久化测试（MockMvc）
+
+- `AccountAuthFlowTest`：注册/登录/退出、CSRF 头必需、缺凭据 400、未登录 401、`/api/**` 需认证、转发头 403。
+- `DeploymentPolicyTest`：LOCAL 与 PUBLIC 的启动前置条件与请求边界（Host、Origin、Sec-Fetch-Site、回环地址、规范源、注册码长度）。
+- `MigrationHistoryTest`：按 owner 落库与隔离、报告字段完整、倒序分页不越权、非法分页先拒绝再落库、重启标记中断且不重复决策。
+- `MigrationHistoryApiTest`：历史只归本账号、他人 404、同账号其他会话只读、历史确认/放弃 409、会话结束后 INTERRUPTED、分页参数越界 400。
+- `DemoMigrationFlowTest`：注册登录 + CSRF 下的双向演示迁移、匹配与确认分离、未连接 409、非法链接 400、任务会话隔离。
+- `testsupport/BridgeRequests`：统一构造满足 LOCAL 边界的 MockMvc 请求（回环 `Host`、`X-Forwarded-*` 置空、CSRF 走请求头）。
+
+### 16.3 前端与人工验收
+
+- `node --test src/test/js/playlist-backup.test.js`：CSV/JSON 备份的解析、转义、公式前缀防护与坏数据拒绝。
+- Chrome / Edge / Safari 桌面端 + 375px 移动端；核心流程 ≤ 5 步、无控制台错误。
+- 端到端手工验证：注册 → 连接演示账号 → 粘贴链接 → 匹配 → 勾选确认 → 报告 → 迁移历史；停服重启后历史仍在、未确认预览显示「任务已中断」、写入阶段中断显示「结果待核查」，第二个账号看到 0 条历史且无法读取他人任务。
+- 真实 QQ 公开歌单读取（联网）与未配置 Apple 令牌时的降级提示。
+
+## 17. 已知限制与后续演进
 
 1. QQ 真实写入依赖网页登录 Cookie，票据约 3 天过期；后续接入官方开放平台 / 扫码登录。
 2. QQ 写接口存在风控与签名通道要求，MVP 采用「如实失败 + 演示兜底」。
 3. Apple 真实链路需要开发者账号与订阅；评审演示以演示模式为主。
-4. 无持久化，服务重启后连接与任务丢失；后续引入 Redis + 任务历史。
-5. 匹配算法为规则型，后续可加入向量检索与用户反馈学习。
-6. 单实例内存任务队列；后续改为消息队列并支持取消/重试。
+4. 历史只读、绝不自动重试：写入阶段中断的任务需要人工去目标平台核查后重新迁移；重复迁移会产生新歌单。
+5. 会话与活动任务在内存里，服务重启后只能从库里恢复报告，无法恢复未完成的连接；H2 单文件、单实例，多实例需共享会话 + PostgreSQL（P2）。
+6. 一个账号同时只允许一个未结束任务、全局最多 16 个活动任务，队列仍是内存态；后续改为消息队列并支持取消/重试。
+7. 无后台管理面板：不能改密、找回密码或管理他人账号；PUBLIC 模式靠邀请码与限流收口。
+8. 匹配算法为规则型，后续可加入向量检索与用户反馈学习。
+9. 部署边界不接受反向代理（转发头一律拒绝），公网必须由应用自身终结 TLS。
 
-## 17. 目录结构
+## 18. 目录结构
 
 ```
 tunebridge/
-├── docs/
-│   ├── PRD.md
-│   └── TECH_DESIGN.md
+├── docs/PRD.md, TECH_DESIGN.md
 ├── src/main/java/com/tunebridge/
-│   ├── config/        # 属性、RestClient、线程池
-│   ├── domain/        # 领域模型
-│   ├── provider/      # QQ / Apple / Demo 适配器
-│   ├── service/       # 连接、迁移、匹配
-│   └── web/           # REST 控制器与异常处理
+│   ├── config/        # AppConfig（RestClient/线程池/会话销毁监听）、SecurityProperties、TuneBridgeProperties
+│   ├── domain/        # MigrationJob(+Snapshot)、Track/Playlist/TrackMatch、ProviderConnection、JobStatus
+│   ├── security/      # SecurityConfiguration、DeploymentPolicy、Boundary/ApiBodyLimit/LoginGuard 过滤器、
+│   │                  # AuthRateLimiter、AccountService/AccountPrincipal/CurrentUser、SecurityResponses
+│   ├── provider/      # MusicProvider SPI + qq/ apple/ netease/ demo/ 与 ProviderRegistry、ProviderException
+│   ├── service/       # ConnectionService、MigrationService、MigrationHistory、TrackMatcher
+│   └── web/           # ApiController、AuthController、ApiExceptionHandler、dto/JobView 等
 ├── src/main/resources/
 │   ├── application.yml
-│   └── static/        # index.html / app.js / styles.css
-├── src/test/java/     # 单元与集成测试
+│   ├── schema.sql     # app_users + migration_history
+│   └── static/        # index.html / app.js / playlist-backup.js / styles.css
+├── src/test/java/com/tunebridge/
+│   ├── testsupport/BridgeRequests.java   # 满足 LOCAL 边界的 MockMvc 请求构造
+│   ├── security/  # AccountAuthFlowTest、DeploymentPolicyTest、AuthRateLimiterTest
+│   ├── service/   # MigrationHistoryTest、TrackMatcherTest、ConnectionServiceTest
+│   ├── web/       # DemoMigrationFlowTest、MigrationHistoryApiTest
+│   └── provider/  # QQ / Apple / NetEase 解析与适配器测试
+├── src/test/js/playlist-backup.test.js
 ├── pom.xml
 └── README.md
 ```
+

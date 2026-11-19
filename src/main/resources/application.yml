@@ -1,4 +1,5 @@
 server:
+  address: ${SERVER_ADDRESS:127.0.0.1}
   port: ${PORT:8080}
   forward-headers-strategy: none
   compression:
@@ -7,19 +8,36 @@ server:
   servlet:
     session:
       timeout: 2h
+      persistent: false
       cookie:
         http-only: true
         same-site: lax
+        secure: ${SESSION_COOKIE_SECURE:false}
+      tracking-modes: cookie
 
 spring:
   application:
     name: tunebridge
+  datasource:
+    url: "${TUNEBRIDGE_DATABASE_URL:jdbc:h2:file:./data/tunebridge;DB_CLOSE_ON_EXIT=FALSE;WRITE_DELAY=0}"
+    username: sa
+    password: ""
+  sql:
+    init:
+      mode: always
+  h2:
+    console:
+      enabled: false
   web:
     resources:
       cache:
         period: 0
 
 tunebridge:
+  security:
+    mode: ${TUNEBRIDGE_SECURITY_MODE:local}
+    public-origin: ${TUNEBRIDGE_PUBLIC_ORIGIN:}
+    registration-code: ${TUNEBRIDGE_REGISTRATION_CODE:}
   apple:
     developer-token: ${APPLE_DEVELOPER_TOKEN:}
     team-id: ${APPLE_TEAM_ID:}

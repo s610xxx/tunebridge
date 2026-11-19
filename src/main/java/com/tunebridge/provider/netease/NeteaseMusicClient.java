@@ -6,6 +6,7 @@ import com.tunebridge.domain.CreatedPlaylist;
 import com.tunebridge.domain.Track;
 import com.tunebridge.provider.ProviderException;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -18,6 +19,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -27,6 +29,7 @@ public class NeteaseMusicClient {
     private static final int PAGE_SIZE = 50;
     private static final Semaphore PROCESSES = new Semaphore(2);
     private static final String UNVERIFIED = "网易云歌单写入未验证，请检查目标歌单后手动处理，勿自动重试";
+    private static final String ORDER_UNVERIFIED = "网易云歌曲已写入，但顺序与来源不一致，请检查目标歌单后手动处理，勿自动重试";
     private final ObjectMapper mapper;
     private final CommandExecutor executor;
 
@@ -119,14 +122,20 @@ public class NeteaseMusicClient {
         }
         if (expected.isEmpty()) return;
         try {
-            for (int start = 0; start < expected.size(); start += PAGE_SIZE) {
-                int end = Math.min(start + PAGE_SIZE, expected.size());
-                String ids = mapper.writeValueAsString(expected.subList(start, end));
+            // NetEase prepends songs, so insert reversed batches from the end.
+            for (int end = expected.size(); end > 0; end -= PAGE_SIZE) {
+                int start = Math.max(0, end - PAGE_SIZE);
+                String ids = mapper.writeValueAsString(expected.subList(start, end).reversed());
                 JsonNode response = call(List.of("playlist", "add", "--playlistId=" + playlist.id(),
                         "--songIdList=" + ids, "--output=json"));
                 if (!response.isArray()) throw ProviderException.upstream(UNVERIFIED);
-                verify(playlist.id(), expected.subList(0, end));
+                verify(playlist.id(), expected.subList(start, expected.size()));
             }
+        } catch (ProviderException ex) {
+            if ("NETEASE_ORDER_MISMATCH".equals(ex.code())) {
+                throw new ProviderException(HttpStatus.BAD_GATEWAY, "NETEASE_ORDER_MISMATCH", ORDER_UNVERIFIED);
+            }
+            throw ProviderException.upstream(UNVERIFIED);
         } catch (Exception ex) {
             throw ProviderException.upstream(UNVERIFIED);
         }
@@ -148,7 +157,12 @@ public class NeteaseMusicClient {
             }
             offset += page.size();
         }
-        if (!actual.equals(expected)) throw ProviderException.upstream(UNVERIFIED);
+        if (!actual.equals(expected)) {
+            if (actual.size() == expected.size() && new HashSet<>(actual).equals(new HashSet<>(expected))) {
+                throw new ProviderException(HttpStatus.BAD_GATEWAY, "NETEASE_ORDER_MISMATCH", ORDER_UNVERIFIED);
+            }
+            throw ProviderException.upstream(UNVERIFIED);
+        }
     }
 
     private JsonNode call(List<String> arguments) {
@@ -201,7 +215,7 @@ public class NeteaseMusicClient {
             List<String> command = new ArrayList<>();
             command.add(node);
             command.add(entry);
-            command.addAll(arguments);
+            arguments.stream().map(NeteaseMusicClient::processArgument).forEach(command::add);
             process = new ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.DISCARD).start();
             Process child = process;
             ByteArrayOutputStream output = new ByteArrayOutputStream();
@@ -240,6 +254,22 @@ public class NeteaseMusicClient {
             if (process != null && process.isAlive()) process.destroyForcibly();
             PROCESSES.release();
         }
+    }
+
+    private static String processArgument(String argument) {
+        if (File.separatorChar != '\\') return argument;
+        // Windows reparses a command line, so embedded quotes must survive Node's argv parsing.
+        StringBuilder quoted = new StringBuilder("\"");
+        int backslashes = 0;
+        for (char ch : argument.toCharArray()) {
+            if (ch == '\\') {
+                backslashes++;
+                continue;
+            }
+            quoted.append("\\".repeat(ch == '"' ? 2 * backslashes + 1 : backslashes)).append(ch);
+            backslashes = 0;
+        }
+        return quoted.append("\\".repeat(2 * backslashes)).append('"').toString();
     }
 
     private static boolean absoluteFile(String value) {

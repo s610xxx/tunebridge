@@ -12,6 +12,7 @@ import com.tunebridge.domain.TrackMatch;
 import com.tunebridge.provider.MusicProvider;
 import com.tunebridge.provider.ProviderException;
 import com.tunebridge.provider.ProviderRegistry;
+import com.tunebridge.web.dto.JobView;
 import jakarta.servlet.http.HttpSession;
 import java.time.Duration;
 import java.time.Instant;
@@ -36,19 +37,21 @@ public class MigrationService {
     private final TrackMatcher trackMatcher;
     private final TuneBridgeProperties properties;
     private final ExecutorService executor;
+    private final MigrationHistory history;
     private final ConcurrentHashMap<String, MigrationJob> jobs = new ConcurrentHashMap<>();
 
     public MigrationService(ProviderRegistry providerRegistry, ConnectionService connectionService,
                             TrackMatcher trackMatcher, TuneBridgeProperties properties,
-                            ExecutorService executor) {
+                            ExecutorService executor, MigrationHistory history) {
         this.providerRegistry = providerRegistry;
         this.connectionService = connectionService;
         this.trackMatcher = trackMatcher;
         this.properties = properties;
         this.executor = executor;
+        this.history = history;
     }
 
-    public MigrationJob createJob(HttpSession session, ProviderId sourceProvider, String sourceUrl,
+    public MigrationJob createJob(HttpSession session, String ownerId, ProviderId sourceProvider, String sourceUrl,
                                   ProviderId targetProvider, String playlistName) {
         if (sourceProvider == targetProvider) {
             throw ProviderException.badRequest("来源平台和目标平台不能相同");
@@ -72,18 +75,15 @@ public class MigrationService {
 
         cleanup();
 
-        String jobId = "mig_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
-        String safeName = sanitizeName(playlistName);
-        MigrationJob job = new MigrationJob(jobId, session.getId(), sourceProvider, targetProvider,
-                sourceUrl.trim(), safeName);
-        jobs.put(jobId, job);
+        cleanup();
         MusicProvider source = providerRegistry.get(sourceProvider);
-        executor.submit(() -> run(job,
-                () -> source.fetchPlaylist(sourceConnection, job.sourceUrl()), targetConnection));
-        return job;
+        String url = sourceUrl.trim();
+        return submitJob(session, ownerId, sourceProvider, targetProvider, url,
+                sanitizeName(playlistName), null, targetConnection,
+                () -> source.fetchPlaylist(sourceConnection, url));
     }
 
-    public MigrationJob createBackupJob(HttpSession session, ProviderId targetProvider,
+    public MigrationJob createBackupJob(HttpSession session, String ownerId, ProviderId targetProvider,
                                         String playlistName, String sourceName, List<Track> tracks) {
         ProviderConnection targetConnection = connectionService.require(session, targetProvider);
         int inputLimit = Math.max(1, properties.getMigration().getMaxTracks()) * 5;
@@ -118,28 +118,125 @@ public class MigrationService {
         Playlist source = new Playlist("backup", name, "来自本地备份", "", "本地备份", "", sourceTracks);
 
         cleanup();
-        String jobId = "mig_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
-        MigrationJob job = new MigrationJob(jobId, session.getId(), targetProvider, targetProvider,
-                "backup://local", sanitizeName(playlistName), "本地备份");
-        jobs.put(jobId, job);
-        executor.submit(() -> run(job, () -> source, targetConnection));
-        return job;
+        return submitJob(session, ownerId, targetProvider, targetProvider, "backup://local",
+                sanitizeName(playlistName), "本地备份", targetConnection, () -> source);
     }
 
-    public MigrationJob getJob(HttpSession session, String jobId) {
+    private MigrationJob submitJob(HttpSession session, String ownerId, ProviderId sourceProvider,
+                                   ProviderId targetProvider, String sourceUrl, String requestedName,
+                                   String sourceLabel, ProviderConnection targetConnection,
+                                   Supplier<Playlist> sourceLoader) {
+        synchronized (jobs) {
+            if (jobs.values().stream().anyMatch(job -> job.ownerId().equals(ownerId) && !job.terminal())) {
+                throw new ProviderException(HttpStatus.CONFLICT, "ACTIVE_JOB",
+                        "已有未结束的任务，请在当前任务中完成确认或暂不迁移；其他会话的任务须回原会话处理");
+            }
+            if (jobs.values().stream().filter(job -> !job.terminal()).count() >= 16) {
+                throw ProviderException.rateLimited("当前任务较多，请稍后再试");
+            }
+            String jobId = "mig_" + UUID.randomUUID().toString().replace("-", "");
+            MigrationJob job = sourceLabel == null
+                    ? new MigrationJob(jobId, session.getId(), ownerId, sourceProvider, targetProvider,
+                            sourceUrl, requestedName, targetConnection, history::save)
+                    : new MigrationJob(jobId, session.getId(), ownerId, sourceProvider, targetProvider,
+                            sourceUrl, requestedName, sourceLabel, targetConnection, history::save);
+            job.checkpoint();
+            jobs.put(jobId, job);
+            try {
+                executor.submit(() -> match(job, sourceLoader, targetConnection));
+            } catch (java.util.concurrent.RejectedExecutionException ex) {
+                job.interrupt("服务正在停止");
+                throw ProviderException.notConfigured("服务正在停止，请稍后再试");
+            }
+            return job;
+        }
+    }
+
+    public JobView getJobView(HttpSession session, String ownerId, String jobId) {
+        cleanup();
         MigrationJob job = jobs.get(jobId);
-        if (job == null || !job.sessionId().equals(session.getId())) {
-            throw ProviderException.notFound("迁移任务不存在或已过期");
+        if (job != null && job.ownerId().equals(ownerId)) {
+            JobView view = JobView.from(job);
+            return job.sessionId().equals(session.getId()) ? view : view.asReadOnly();
+        }
+        return history.find(ownerId, jobId);
+    }
+
+    public MigrationHistory.Page listHistory(String ownerId, int offset, int limit) {
+        cleanup();
+        return history.list(ownerId, offset, limit);
+    }
+
+    public JobView currentJob(HttpSession session, String ownerId) {
+        cleanup();
+        return jobs.values().stream().filter(job -> job.ownerId().equals(ownerId)
+                        && job.sessionId().equals(session.getId()) && !job.terminal())
+                .findFirst().map(JobView::from).orElse(null);
+    }
+
+    private MigrationJob requireSessionJob(HttpSession session, String ownerId, String jobId) {
+        cleanup();
+        MigrationJob job = jobs.get(jobId);
+        if (job == null || !job.ownerId().equals(ownerId)) {
+            history.find(ownerId, jobId);
+            throw new ProviderException(HttpStatus.CONFLICT, "HISTORY_READ_ONLY", "历史任务只读，不会重新执行写入");
+        }
+        if (!job.sessionId().equals(session.getId())) {
+            throw new ProviderException(HttpStatus.CONFLICT, "HISTORY_READ_ONLY", "只能在创建任务的原会话中确认");
         }
         return job;
     }
 
-    private void run(MigrationJob job, Supplier<Playlist> sourceLoader, ProviderConnection targetConnection) {
-        job.start();
+    public MigrationJob confirmJob(HttpSession session, String ownerId, String jobId, List<Integer> selectedIndices) {
+        synchronized (session) {
+            MigrationJob job = requireSessionJob(session, ownerId, jobId);
+            if (job.status() != JobStatus.AWAITING_CONFIRMATION) {
+                throw new ProviderException(HttpStatus.CONFLICT, "MIGRATION_STATE", "任务不在等待确认状态，请勿重复确认");
+            }
+            requireOriginalTarget(session, job);
+            List<Track> selected = job.confirm(selectedIndices);
+            try {
+                executor.submit(() -> write(session, job, selected));
+            } catch (java.util.concurrent.RejectedExecutionException ex) {
+                job.interrupt("服务正在停止，尚未开始写入");
+            }
+            return job;
+        }
+    }
+
+    public JobView abandonJob(HttpSession session, String ownerId, String jobId) {
+        synchronized (session) {
+            MigrationJob job = requireSessionJob(session, ownerId, jobId);
+            if (job.status() != JobStatus.AWAITING_CONFIRMATION) {
+                throw new ProviderException(HttpStatus.CONFLICT, "MIGRATION_STATE", "只能放弃尚未确认的预览");
+            }
+            job.interrupt("已放弃本次匹配预览");
+            return JobView.from(job);
+        }
+    }
+
+    public void endSession(String sessionId) {
+        jobs.values().stream().filter(job -> job.sessionId().equals(sessionId) && !job.terminal()).forEach(job -> {
+            try {
+                job.interrupt("登录会话已结束");
+            } catch (RuntimeException ex) {
+                log.error("Unable to persist ended session job {}", job.id());
+            }
+        });
+    }
+
+    private void requireOriginalTarget(HttpSession session, MigrationJob job) {
+        if (connectionService.get(session, job.targetProvider()) != job.targetConnection()) {
+            throw new ProviderException(HttpStatus.CONFLICT, "TARGET_CHANGED",
+                    "目标连接已断开或更换，请重新匹配后确认");
+        }
+    }
+
+    private void match(MigrationJob job, Supplier<Playlist> sourceLoader, ProviderConnection targetConnection) {
         MusicProvider targetProvider = providerRegistry.get(job.targetProvider());
-        CreatedPlaylist created = null;
 
         try {
+            job.start();
             job.step("正在读取来源歌单", 5);
             Playlist source = sourceLoader.get();
             if (source.tracks().isEmpty()) {
@@ -155,7 +252,6 @@ public class MigrationService {
             }
 
             job.step("正在匹配歌曲", 15);
-            List<Track> matchedTargets = new ArrayList<>();
             int total = sourceTracks.size();
             int searchFailures = 0;
             ProviderException lastSearchError = null;
@@ -181,16 +277,15 @@ public class MigrationService {
 
                 TrackMatcher.Evaluation evaluation = trackMatcher.evaluate(sourceTrack, candidates);
                 if (evaluation.matched()) {
-                    matchedTargets.add(evaluation.candidate());
                     job.addMatch(TrackMatch.matched(sourceTrack, evaluation.candidate(),
-                            evaluation.score(), evaluation.lowConfidence(), evaluation.note()));
+                            evaluation.score(), evaluation.lowConfidence(), evaluation.note()), evaluation.candidate());
                     job.log("✓ " + sourceTrack.title() + " → " + evaluation.candidate().title()
                                     + "（" + percent(evaluation.score()) + "%）"
                                     + (evaluation.lowConfidence() ? " · 低置信" : ""),
                             "SUCCESS");
                 } else {
                     job.addMatch(new TrackMatch(sourceTrack, false, false,
-                            "", "", "", "", "", evaluation.score(), evaluation.note()));
+                            "", "", "", "", "", evaluation.score(), evaluation.note()), null);
                     job.log("✗ " + sourceTrack.title() + " · " + evaluation.note(), "WARN");
                 }
 
@@ -198,13 +293,28 @@ public class MigrationService {
                 sleep(realUpstream ? Math.max(0, properties.getMigration().getRequestIntervalMs()) : 80);
             }
 
-            if (matchedTargets.isEmpty()) {
+            if (job.matchesSnapshot().stream().noneMatch(TrackMatch::matched)) {
                 if (searchFailures == total && lastSearchError != null) {
                     throw lastSearchError;
                 }
                 throw ProviderException.upstream("没有匹配到任何歌曲，已取消创建空歌单");
             }
 
+            job.awaitConfirmation();
+        } catch (ProviderException ex) {
+            job.fail(ex.getMessage());
+        } catch (Exception ex) {
+            log.error("Matching {} failed", job.id(), ex);
+            job.fail("匹配失败，请稍后重新匹配");
+        }
+    }
+
+    private void write(HttpSession session, MigrationJob job, List<Track> selected) {
+        MusicProvider targetProvider = providerRegistry.get(job.targetProvider());
+        ProviderConnection targetConnection = job.targetConnection();
+        Playlist source = job.sourcePlaylist();
+        CreatedPlaylist created = null;
+        try {
             job.step("正在创建目标歌单", 79);
             String targetName = job.requestedName().isBlank()
                     ? sanitizeName(source.name() + " · 音桥")
@@ -212,18 +322,25 @@ public class MigrationService {
             if (targetName.isBlank()) {
                 targetName = "音桥迁移歌单";
             }
-            String description = "由 TuneBridge 从「" + source.name() + "」迁移，匹配 "
-                    + matchedTargets.size() + " / " + total + " 首";
+            String description = "由 TuneBridge 从「" + source.name() + "」迁移，已确认 "
+                    + selected.size() + " / " + job.matchesSnapshot().size() + " 首";
 
-            created = targetProvider.createPlaylist(targetConnection, targetName, description);
+            synchronized (session) {
+                requireOriginalTarget(session, job);
+                job.beginWrite();
+                created = targetProvider.createPlaylist(targetConnection, targetName, description);
+                job.targetCreated(created);
+            }
             job.progress(84);
             job.log("已在 " + job.targetProvider().label() + " 创建歌单《" + created.name() + "》", "SUCCESS");
 
             job.step("正在写入歌曲", 88);
-            targetProvider.addTracks(targetConnection, created, matchedTargets);
-            job.progress(98);
-            job.complete(new CreatedPlaylist(created.id(), created.name(), created.url(),
-                    matchedTargets.size(), created.metadata()));
+            synchronized (session) {
+                requireOriginalTarget(session, job);
+                targetProvider.addTracks(targetConnection, created, selected);
+                job.complete(new CreatedPlaylist(created.id(), created.name(), created.url(),
+                        selected.size(), java.util.Map.of()));
+            }
         } catch (ProviderException ex) {
             if (created != null) {
                 job.log("目标歌单已创建，但歌曲写入未完成，请在目标平台检查后手动处理", "WARN");
@@ -234,7 +351,7 @@ public class MigrationService {
             if (created != null) {
                 job.log("目标歌单已创建，但歌曲写入未完成，请在目标平台检查后手动处理", "WARN");
             }
-            job.fail("迁移失败，请稍后重试");
+            job.fail("迁移失败，请检查目标歌单后手动处理，勿自动重试");
         }
     }
 
@@ -246,8 +363,10 @@ public class MigrationService {
         Instant cutoff = Instant.now().minus(Duration.ofHours(2));
         jobs.entrySet().removeIf(entry -> {
             MigrationJob job = entry.getValue();
-            return (job.status() == JobStatus.COMPLETED || job.status() == JobStatus.FAILED)
-                    && job.createdAt().isBefore(cutoff);
+            if (job.status() == JobStatus.AWAITING_CONFIRMATION && job.createdAt().isBefore(cutoff)) {
+                job.interrupt("匹配预览已过期");
+            }
+            return job.terminal() && job.createdAt().isBefore(cutoff);
         });
     }
 

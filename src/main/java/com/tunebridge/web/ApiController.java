@@ -1,5 +1,6 @@
 package com.tunebridge.web;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.tunebridge.config.TuneBridgeProperties;
 import com.tunebridge.domain.ConnectionMode;
 import com.tunebridge.domain.MigrationJob;
@@ -15,6 +16,8 @@ import com.tunebridge.provider.demo.DemoStore;
 import com.tunebridge.provider.netease.NeteaseLocalAccess;
 import com.tunebridge.service.ConnectionService;
 import com.tunebridge.service.MigrationService;
+import com.tunebridge.service.MigrationHistory;
+import com.tunebridge.security.CurrentUser;
 import com.tunebridge.web.dto.ConnectionView;
 import com.tunebridge.web.dto.JobView;
 import com.tunebridge.web.dto.PlaylistView;
@@ -164,8 +167,8 @@ public class ApiController {
                 tracks.add(new Track("", item.title(), item.artist(), item.album(), duration, "", 0));
             }
         }
-        MigrationJob job = migrationService.createBackupJob(session, target, request.playlistName(),
-                request.sourceName(), tracks);
+        MigrationJob job = migrationService.createBackupJob(session, CurrentUser.id(), target,
+                request.playlistName(), request.sourceName(), tracks);
         return JobView.from(job);
     }
 
@@ -173,14 +176,45 @@ public class ApiController {
     public JobView startMigration(@RequestBody MigrationRequest request, HttpSession session) {
         ProviderId source = ProviderId.from(request.sourceProvider());
         ProviderId target = ProviderId.from(request.targetProvider());
-        MigrationJob job = migrationService.createJob(session, source, request.sourceUrl(),
+        MigrationJob job = migrationService.createJob(session, CurrentUser.id(), source, request.sourceUrl(),
                 target, request.playlistName());
         return JobView.from(job);
     }
 
+    @GetMapping("/migrations")
+    public MigrationHistory.Page history(@RequestParam(defaultValue = "0") int offset,
+                                         @RequestParam(defaultValue = "20") int limit) {
+        return migrationService.listHistory(CurrentUser.id(), offset, limit);
+    }
+
+    @GetMapping("/migrations/current")
+    public JobView currentMigration(HttpSession session) {
+        return migrationService.currentJob(session, CurrentUser.id());
+    }
+
     @GetMapping("/migrations/{id}")
     public JobView migration(@PathVariable("id") String id, HttpSession session) {
-        return JobView.from(migrationService.getJob(session, id));
+        return migrationService.getJobView(session, CurrentUser.id(), id);
+    }
+
+    @PostMapping("/migrations/{id}/abandon")
+    public JobView abandonMigration(@PathVariable("id") String id, HttpSession session) {
+        return migrationService.abandonJob(session, CurrentUser.id(), id);
+    }
+
+    @PostMapping("/migrations/{id}/confirm")
+    public JobView confirmMigration(@PathVariable("id") String id, @RequestBody ConfirmRequest request,
+                                    HttpSession session) {
+        if (request == null || request.selectedIndices() == null) {
+            throw ProviderException.badRequest("请至少选择一首已匹配的歌曲");
+        }
+        List<Integer> indices = request.selectedIndices().stream().map(index -> {
+            if (index == null || !index.isIntegralNumber() || !index.canConvertToInt()) {
+                throw ProviderException.badRequest("所选歌曲序号必须是整数");
+            }
+            return index.intValue();
+        }).toList();
+        return JobView.from(migrationService.confirmJob(session, CurrentUser.id(), id, indices));
     }
 
     @GetMapping("/demo/library")
@@ -210,5 +244,8 @@ public class ApiController {
     }
 
     public record BackupTrack(String title, String artist, String album, Integer durationSec) {
+    }
+
+    public record ConfirmRequest(List<JsonNode> selectedIndices) {
     }
 }

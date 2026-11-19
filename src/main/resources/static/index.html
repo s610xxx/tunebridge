@@ -3,359 +3,208 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TuneBridge 音桥 · 把歌单搬到另一个音乐世界</title>
-    <meta name="description" content="TuneBridge 音桥：迁移 QQ 音乐与 Apple Music 歌单，或将 QQ 歌单迁移至网易云音乐。">
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23ff6b57'/%3E%3Cpath d='M38 14v25.1a8.2 8.2 0 1 1-4-7V22l-14 3.4v19.7a8.2 8.2 0 1 1-4-7V20l22-6z' fill='%23fff4e8'/%3E%3C/svg%3E">
+    <meta name="theme-color" content="#2858ce">
+    <title>TuneBridge 音桥 · 歌单工作台</title>
+    <meta name="description" content="迁移 QQ 音乐与 Apple Music 歌单，或将 QQ 歌单迁移至网易云音乐。先逐首匹配，审阅确认后再写入，也可在本地备份歌单。">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%232858ce'/%3E%3Cpath d='M38 14v25.1a8.2 8.2 0 1 1-4-7V22l-14 3.4v19.7a8.2 8.2 0 1 1-4-7V20l22-6z' fill='white'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-<div class="ambient" aria-hidden="true">
-    <div class="ambient-orb orb-coral"></div>
-    <div class="ambient-orb orb-green"></div>
-    <div class="ambient-orb orb-amber"></div>
-    <div class="grid-fade"></div>
+<a class="skip-link" href="#workspace">跳到迁移工作台</a>
+<svg class="icon-defs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="icon-note" viewBox="0 0 24 24"><path d="M9 17V5l11-2v12M9 8l11-2"/><ellipse cx="6" cy="18" rx="3" ry="2.5"/><ellipse cx="17" cy="16" rx="3" ry="2.5"/></symbol>
+    <symbol id="icon-transfer" viewBox="0 0 24 24"><path d="M4 7h16l-4-4m4 14H4l4 4M20 7l-4 4M4 17l4-4"/></symbol>
+    <symbol id="icon-backup" viewBox="0 0 24 24"><path d="M4 9v11h16V9M3 4h18v5H3zM9 13h6"/></symbol>
+    <symbol id="icon-library" viewBox="0 0 24 24"><path d="M4 4v16M9 4v16M14 5l5-1 3 15-5 1z"/></symbol>
+    <symbol id="icon-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 5 .5c0 1.5-2.5 2-2.5 3.5M12 17h.01"/></symbol>
+    <symbol id="icon-shield" viewBox="0 0 24 24"><path d="m12 3-8 3v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6l-8-3Z"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="icon-link" viewBox="0 0 24 24"><path d="m10 13 4-4m-5 6-2 2a3.5 3.5 0 0 1-5-5l4-4a3.5 3.5 0 0 1 5 0m2 1 2-2a3.5 3.5 0 0 1 5 5l-4 4a3.5 3.5 0 0 1-5 0"/></symbol>
+</svg>
+
+<aside class="sidebar" aria-label="应用导航">
+    <a class="brand" href="#top" aria-label="TuneBridge 音桥首页">
+        <span class="brand-mark"><svg class="icon" aria-hidden="true"><use href="#icon-note"/></svg></span>
+        <span class="brand-text">TuneBridge<small>音桥 / 歌单自由迁移</small></span>
+    </a>
+    <nav class="side-nav" aria-label="主导航">
+        <a class="nav-link active" href="#workspace" data-section-link aria-current="location"><svg class="icon" aria-hidden="true"><use href="#icon-transfer"/></svg><span>迁移歌单</span></a>
+        <a class="nav-link" href="#backup" data-section-link><svg class="icon" aria-hidden="true"><use href="#icon-backup"/></svg><span>歌单备份</span></a>
+        <button type="button" class="nav-link" id="openLibraryBtn"><svg class="icon" aria-hidden="true"><use href="#icon-library"/></svg><span>演示音乐库</span></button>
+        <button type="button" class="nav-link" id="openHistoryBtn"><svg class="icon" aria-hidden="true"><use href="#icon-backup"/></svg><span>迁移历史</span></button>
+        <a class="nav-link" href="#how" data-section-link><svg class="icon" aria-hidden="true"><use href="#icon-help"/></svg><span>使用说明</span></a>
+    </nav>
+    <div class="sidebar-foot">
+        <div class="session-library"><svg class="icon" aria-hidden="true"><use href="#icon-library"/></svg><span>本次演示歌单</span><b id="demoStatCount">0</b></div>
+        <p>只搬歌单，不搬走你的喜欢。</p>
+        <span class="sidebar-signature">TuneBridge 音桥</span>
+    </div>
+</aside>
+
+<div class="app-main" id="top">
+    <header class="site-header">
+        <span class="page-label">你的歌单工作台</span>
+        <div class="header-actions">
+            <span class="header-safety"><svg class="icon" aria-hidden="true"><use href="#icon-shield"/></svg>先匹配，再确认</span>
+            <button type="button" class="btn btn-outline btn-small" id="headerDemoBtn">体验演示</button>
+            <button type="button" class="btn btn-outline btn-small account-button" id="accountBtn" aria-haspopup="dialog">音桥账号登录</button>
+            <button type="button" class="btn btn-ghost btn-small is-hidden" id="logoutBtn">退出音桥</button>
+        </div>
+    </header>
+
+    <main>
+        <section class="hero" aria-labelledby="heroTitle">
+            <div class="hero-copy">
+                <h1 id="heroTitle">换个平台，<br>喜欢照听。</h1>
+                <p class="hero-lead">把收藏已久的歌单带到另一边。<br>逐首匹配，由你决定哪些值得一起走。</p>
+                <div class="hero-actions">
+                    <a class="btn btn-light" href="#workspace">开始迁移歌单</a>
+                    <button type="button" class="hero-demo" id="heroDemoBtn"><svg class="icon" aria-hidden="true"><use href="#icon-note"/></svg><span>一键体验匹配</span></button>
+                </div>
+            </div>
+            <div class="record-scene" aria-hidden="true">
+                <div class="record-disc"><div class="record-label">音桥<span>把喜欢留在一起</span></div></div>
+                <div class="record-sleeve">
+                    <div class="sleeve-top"><span>我的循环歌单</span><svg class="icon"><use href="#icon-note"/></svg></div>
+                    <div class="sleeve-art"><i></i><i></i><i></i><i></i><i></i></div>
+                    <div class="sleeve-bottom"><b>喜欢，没有边界。</b><span>TuneBridge</span></div>
+                </div>
+                <div class="record-caption"><span class="provider-dot qq"></span><span class="provider-dot apple"></span><span class="provider-dot netease"></span><span>同一份喜欢，不同的播放器</span></div>
+            </div>
+        </section>
+
+        <section class="workspace" id="workspace" aria-labelledby="workspaceTitle">
+            <div class="section-heading">
+                <div><h2 id="workspaceTitle">迁移歌单</h2><p>选好方向，连接目标平台，再贴入来源歌单。</p></div>
+                <span class="section-note"><svg class="icon" aria-hidden="true"><use href="#icon-shield"/></svg>确认前不会写入</span>
+            </div>
+            <div class="workspace-grid">
+                <div class="flow-card">
+                    <div class="flow-top">
+                        <h3 class="step-pill"><b>1</b>选择方向与连接平台</h3>
+                        <div class="direction" aria-label="当前迁移方向">
+                            <div class="direction-chip" id="sourceChip"><span class="provider-dot qq"></span><span>QQ 音乐</span><small>来源 A</small></div>
+                            <button type="button" class="swap-btn" id="swapBtn" title="交换迁移方向" aria-label="交换迁移方向"><svg class="icon" aria-hidden="true"><use href="#icon-transfer"/></svg></button>
+                            <div class="direction-chip" id="targetChip"><span class="provider-dot apple"></span><span>Apple Music</span><small>目标 B</small></div>
+                        </div>
+                    </div>
+                    <fieldset class="direction-options" aria-describedby="directionHelp">
+                        <legend class="sr-only">选择迁移方向</legend>
+                        <div class="direction-option-list">
+                            <label><input type="radio" name="directionChoice" value="QQ_APPLE" aria-label="从 QQ 音乐迁移到 Apple Music" checked><span>QQ 音乐 <span aria-hidden="true">→</span> Apple Music</span></label>
+                            <label><input type="radio" name="directionChoice" value="APPLE_QQ" aria-label="从 Apple Music 迁移到 QQ 音乐"><span>Apple Music <span aria-hidden="true">→</span> QQ 音乐</span></label>
+                            <label><input type="radio" name="directionChoice" value="QQ_NETEASE" aria-label="从 QQ 音乐迁移到网易云音乐"><span>QQ 音乐 <span aria-hidden="true">→</span> 网易云音乐</span></label>
+                        </div>
+                        <p id="directionHelp">QQ 与 Apple 支持双向迁移；网易云仅作为目标。</p>
+                    </fieldset>
+                    <div class="provider-cards">
+                        <article class="provider-card" data-provider-card="QQ_MUSIC">
+                            <div class="provider-head">
+                                <div class="provider-icon qq"><svg class="icon" aria-hidden="true"><use href="#icon-note"/></svg></div>
+                                <div class="provider-title"><h3>QQ 音乐</h3><p>公开歌单免平台登录读取</p></div>
+                                <button type="button" class="connect-btn" data-connect="QQ_MUSIC" aria-label="连接或管理 QQ 音乐">连接</button>
+                            </div>
+                            <div class="provider-base"><span class="role-badge" data-role="QQ_MUSIC">来源 A</span><span class="connection-state" id="status-QQ_MUSIC"><i></i>未连接</span></div>
+                        </article>
+                        <article class="provider-card" data-provider-card="APPLE_MUSIC">
+                            <div class="provider-head">
+                                <div class="provider-icon apple"><svg class="icon" aria-hidden="true"><use href="#icon-note"/></svg></div>
+                                <div class="provider-title"><h3>Apple Music</h3><p>通过 MusicKit 授权</p></div>
+                                <button type="button" class="connect-btn" data-connect="APPLE_MUSIC" aria-label="连接或管理 Apple Music">连接</button>
+                            </div>
+                            <div class="provider-base"><span class="role-badge" data-role="APPLE_MUSIC">目标 B</span><span class="connection-state" id="status-APPLE_MUSIC"><i></i>未连接</span></div>
+                        </article>
+                        <article class="provider-card" data-provider-card="NETEASE_MUSIC">
+                            <div class="provider-head">
+                                <div class="provider-icon netease"><svg class="icon" aria-hidden="true"><use href="#icon-note"/></svg></div>
+                                <div class="provider-title"><h3>网易云音乐</h3><p>本机 CLI 账号连接</p></div>
+                                <button type="button" class="connect-btn" data-connect="NETEASE_MUSIC" aria-label="连接或管理网易云音乐">连接</button>
+                            </div>
+                            <div class="provider-base"><span class="role-badge" data-role="NETEASE_MUSIC">未选用</span><span class="connection-state" id="status-NETEASE_MUSIC"><i></i>未连接</span></div>
+                        </article>
+                    </div>
+                    <div class="flow-step">
+                        <h3 class="step-pill"><b>2</b>添加来源歌单</h3>
+                        <label class="field-label" for="sourceUrl">歌单分享链接</label>
+                        <div class="link-input">
+                            <span class="input-icon"><svg class="icon" aria-hidden="true"><use href="#icon-link"/></svg></span>
+                            <input id="sourceUrl" type="text" autocomplete="off" spellcheck="false" placeholder="粘贴 QQ 音乐歌单分享链接" aria-describedby="linkHint">
+                            <button type="button" class="ghost-mini" id="useSampleBtn">用示例</button>
+                        </div>
+                        <div class="link-hint"><span id="linkHint">QQ 公开歌单可直接解析，无需登录</span><button type="button" class="btn btn-outline btn-small" id="previewBtn">解析歌单</button></div>
+                        <div class="preview-panel is-hidden" id="previewPanel" aria-live="polite"></div>
+                    </div>
+                    <div class="flow-step migrate-step">
+                        <h3 class="step-pill"><b>3</b>匹配后，审阅并确认</h3>
+                        <div class="migrate-options"><label class="field-label" for="playlistName">新歌单名称 <span>可选</span></label><input id="playlistName" class="text-input" maxlength="40" placeholder="默认使用原歌单名 + 音桥"></div>
+                        <div class="migrate-actions">
+                            <div><p class="migrate-note" id="migrateNote" aria-live="polite">登录音桥并连接目标平台后即可开始</p><button type="button" class="text-link is-hidden" id="restoreCurrentBtn">重新查询当前任务（只读）</button></div>
+                            <button type="button" class="btn btn-primary btn-large" id="migrateBtn" disabled><svg class="icon" aria-hidden="true"><use href="#icon-transfer"/></svg><span class="btn-label">开始匹配</span></button>
+                        </div>
+                    </div>
+                </div>
+                <aside class="side-panel" aria-label="迁移提示">
+                    <div class="demo-card">
+                        <div class="demo-cover" aria-hidden="true"><span class="mini-disc"></span><svg class="icon"><use href="#icon-note"/></svg></div>
+                        <h3>先用一张歌单，<br>试试音桥。</h3>
+                        <p>无需真实账号。用内置曲库体验匹配、勾选和迁移报告。</p>
+                        <div class="sample-tracks" aria-label="演示曲目示例"><div><span>晴天</span><small>周杰伦</small></div><div><span>小半</span><small>陈粒</small></div><div><span>平凡之路</span><small>朴树</small></div></div>
+                        <button type="button" class="btn btn-outline btn-block" id="sideDemoBtn">进入演示匹配</button>
+                        <small class="demo-footnote">确认后也只写入演示音乐库</small>
+                    </div>
+                    <div class="tips-card">
+                        <h3><svg class="icon" aria-hidden="true"><use href="#icon-shield"/></svg>每一步，由你决定</h3>
+                        <ul><li>先搜索匹配，不立即创建歌单。</li><li>低置信结果默认不选，版本差异逐条标注。</li><li>确认后按来源顺序写入所选歌曲。</li></ul>
+                        <a href="#how">了解连接与迁移限制</a>
+                    </div>
+                </aside>
+            </div>
+        </section>
+
+        <section class="backup-section" id="backup" aria-labelledby="backupTitle">
+            <div class="section-heading"><div><h2 id="backupTitle">给喜欢留一份备份</h2><p>读取 QQ 歌单，或导入已有曲目，保存为 CSV / JSON，也可以恢复到已连接的音乐平台。</p></div><span class="section-note"><svg class="icon" aria-hidden="true"><use href="#icon-backup"/></svg>导入文件不上传</span></div>
+            <div class="backup-grid">
+                <div class="backup-form">
+                    <label class="field-label" for="backupName">歌单名称</label><input id="backupName" class="text-input" maxlength="100" placeholder="我的歌单">
+                    <label class="field-label" for="backupUrl">QQ 音乐歌单链接</label>
+                    <div class="backup-url-row"><input id="backupUrl" class="text-input" type="text" autocomplete="off" placeholder="粘贴 QQ 音乐歌单分享链接"><button type="button" class="btn btn-outline" id="backupReadQq">读取歌单</button></div>
+                    <p class="backup-note">公开歌单直接读取；私有歌单需要先连接 QQ，实际可用性取决于平台。</p>
+                    <div class="backup-divider"><span>或手动提供曲目</span></div>
+                    <label class="field-label" for="backupText">粘贴曲目</label><textarea id="backupText" class="text-area" rows="5" placeholder="每行一首，例如：&#10;晴天 - 周杰伦&#10;小半 - 陈粒" aria-describedby="backupTextHelp"></textarea>
+                    <p class="backup-note" id="backupTextHelp">每行“歌名 - 歌手”，也支持用 Tab 分隔歌名、歌手和专辑。</p>
+                    <div class="backup-input-actions"><button type="button" class="btn btn-primary" id="backupParse">生成预览</button><label class="backup-file-label" for="backupFile">导入 CSV / JSON<input id="backupFile" type="file" accept=".csv,.json,text/csv,application/json" aria-describedby="backupFileHelp"></label></div>
+                    <p class="backup-note" id="backupFileHelp">文件不超过 5 MB；CSV 需包含 title（歌名）表头。</p>
+                </div>
+                <div class="backup-result" aria-live="polite">
+                    <div class="backup-result-head"><h3>备份预览</h3><span class="preview-count" id="backupCount">0 首</span></div>
+                    <p class="backup-note" id="backupStatus">读取歌单或导入曲目后，就可以预览并下载。</p>
+                    <div class="backup-tracks" id="backupTracks"></div>
+                    <div class="backup-export-actions"><button type="button" class="btn btn-primary" id="backupJson" disabled>下载 JSON</button><button type="button" class="btn btn-outline" id="backupCsv" disabled>下载 CSV</button></div>
+                    <p class="backup-note">JSON 保留完整原文；CSV 对可能触发表格公式的内容添加单引号。预览中的曲目也可以直接恢复到已连接平台。</p>
+                    <div class="backup-divider"><span>恢复到音乐平台</span></div>
+                    <div class="backup-restore">
+                        <label class="field-label" for="backupTarget">目标平台</label>
+                        <select id="backupTarget" class="text-input"></select>
+                        <p class="backup-note" id="backupTargetNote">连接目标平台后即可恢复。</p>
+                        <button type="button" class="btn btn-primary btn-block" id="backupMigrate" disabled>开始恢复迁移</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="how-section" id="how" aria-labelledby="howTitle">
+            <div class="section-heading"><div><h2 id="howTitle">开始之前，了解这些</h2><p>迁移的是歌单与歌曲引用，不是音频文件。</p></div></div>
+            <div class="how-grid">
+                <article class="how-card"><span class="provider-dot qq"></span><h3>QQ 音乐</h3><p>公开歌单免平台登录读取。私有歌单、创建歌单与加歌需要有效 Cookie；平台风控可能影响写入。</p></article>
+                <article class="how-card"><span class="provider-dot apple"></span><h3>Apple Music</h3><p>需要配置开发者令牌并完成用户授权。确认迁移后，新歌单写入你的 iCloud 音乐资料库。</p></article>
+                <article class="how-card"><span class="provider-dot netease"></span><h3>网易云音乐</h3><p>仅支持 QQ 到网易云。使用服务器运行用户已登录的本机 CLI，不是多用户授权；断开音桥不会退出 CLI。</p></article>
+            </div>
+            <div class="real-note"><svg class="icon" aria-hidden="true"><use href="#icon-help"/></svg><p>同一首歌可能有不同版本。请核对匹配结果中的歌手、专辑和 Live / Remix 提示；如果写入结果不确定，先检查目标歌单，不要重复提交。</p></div>
+        </section>
+    </main>
+    <footer class="site-footer"><span>TuneBridge 音桥</span><p>仅用于个人歌单备份迁移，不提供下载或版权绕过能力。请遵守各平台服务条款。</p></footer>
 </div>
 
-<header class="site-header">
-    <a class="brand" href="#" aria-label="TuneBridge 音桥首页">
-        <span class="brand-mark">
-            <svg viewBox="0 0 64 64" aria-hidden="true">
-                <path d="M38 12v26.1a8.4 8.4 0 1 1-4-7.2V21l-14 3.4v19.7a8.4 8.4 0 1 1-4-7.2V19l22-7z" fill="currentColor"/>
-            </svg>
-        </span>
-        <span class="brand-text">TuneBridge<em>音桥</em></span>
-    </a>
-    <nav class="header-nav" aria-label="主导航">
-        <span class="competition-pill"><i></i>LifeHack 2026</span>
-        <button type="button" class="nav-link" id="openLibraryBtn">演示音乐库</button>
-        <a class="nav-link" href="#how">如何使用</a>
-        <button type="button" class="btn btn-primary btn-small header-cta" id="headerDemoBtn">一键体验</button>
-    </nav>
-</header>
-
-<main>
-    <section class="hero">
-        <div class="hero-copy">
-            <div class="eyebrow"><span class="eyebrow-dot"></span>2026 Qoder 高校创造力大赛 · LifeHack 生活娱乐</div>
-            <h1>你的歌单，<br><span class="gradient-text">不该被困在<span class="nowrap">一个 App 里。</span></span></h1>
-            <p class="hero-lead">在浏览器里连接目标音乐 App，粘贴另一边的歌单链接。音桥会逐首搜索、匹配、创建歌单，把几个小时的手动搬运压缩成一次点击。</p>
-            <div class="hero-actions">
-                <button type="button" class="btn btn-primary btn-large" id="heroDemoBtn">
-                    <span>一键体验迁移</span>
-                    <span class="btn-arrow">→</span>
-                </button>
-                <a class="btn btn-ghost btn-large" href="#backup">备份歌单</a>
-                <a class="btn btn-ghost btn-large" href="#workspace">进入工作台</a>
-            </div>
-            <div class="hero-facts">
-                <div class="fact"><strong>3</strong><span>支持的迁移方向</span></div>
-                <div class="fact"><strong>&lt;60s</strong><span>完成一次演示迁移</span></div>
-                <div class="fact"><strong>CLI</strong><span>网易云使用本机账号</span></div>
-            </div>
-        </div>
-
-        <div class="hero-visual" aria-hidden="true">
-            <div class="orbit orbit-one"></div>
-            <div class="orbit orbit-two"></div>
-            <div class="vinyl">
-                <div class="vinyl-label">
-                    <span class="vinyl-note">♪</span>
-                    <small>TUNEBRIDGE</small>
-                </div>
-            </div>
-
-            <div class="float-card source-float">
-                <div class="mini-head"><span class="provider-dot qq"></span>QQ 音乐 · 夏夜循环</div>
-                <div class="mini-track"><span>01</span>晴天 <em>周杰伦</em></div>
-                <div class="mini-track"><span>02</span>小半 <em>陈粒</em></div>
-                <div class="mini-track"><span>03</span>平凡之路 <em>朴树</em></div>
-                <div class="mini-bar"><i></i></div>
-            </div>
-
-            <div class="float-card target-float">
-                <div class="mini-head"><span class="provider-dot apple"></span>Apple Music</div>
-                <div class="mini-success"><span>✓</span> 已创建 · 10 首匹配</div>
-                <div class="mini-wave">
-                    <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
-                </div>
-            </div>
-
-            <div class="bridge-chip"><span class="bridge-line"></span>音桥正在匹配<span class="bridge-line"></span></div>
-
-            <div class="equalizer">
-                <i></i><i></i><i></i><i></i><i></i><i></i><i></i>
-            </div>
-        </div>
-    </section>
-
-    <div class="trust-strip">
-        <span><b>浏览器操作</b> 网易云真实模式需要本机 CLI</span>
-        <span><b>自动匹配</b> 保留歌曲顺序</span>
-        <span><b>本机账号</b> CLI 登录状态可能保存在本机</span>
-        <span><b>逐首报告</b> 未匹配也看得见</span>
-    </div>
-
-    <section class="backup-section" id="backup">
-        <div class="section-heading">
-            <span class="kicker">PLAYLIST BACKUP</span>
-            <h2>先把歌单留在自己手里。</h2>
-            <p>读取 QQ 音乐歌单，或手动导入曲目，在浏览器中预览、备份，并恢复到已连接的音乐平台。</p>
-        </div>
-        <div class="backup-grid">
-            <div class="flow-card backup-form">
-                <label class="field-label" for="backupName">歌单名称</label>
-                <input id="backupName" class="text-input" maxlength="100" placeholder="我的歌单">
-
-                <label class="field-label" for="backupUrl">QQ 音乐歌单链接</label>
-                <div class="backup-url-row">
-                    <input id="backupUrl" class="text-input" type="text" autocomplete="off" placeholder="粘贴 QQ 音乐歌单分享链接">
-                    <button type="button" class="btn btn-outline" id="backupReadQq">读取歌单</button>
-                </div>
-                <p class="backup-note">使用现有 QQ 读取能力，私有歌单需要先连接 QQ。真实接口的可用性和使用权限仍需确认。</p>
-
-                <div class="backup-divider"><span>或手动提供曲目</span></div>
-                <label class="field-label" for="backupText">粘贴曲目</label>
-                <textarea id="backupText" class="text-area" rows="6" placeholder="每行一首，例如：&#10;晴天 - 周杰伦&#10;小半 - 陈粒"></textarea>
-                <p class="backup-note">每行填写“歌名 - 歌手”，也支持用 Tab 分隔歌名、歌手和专辑。</p>
-                <div class="backup-input-actions">
-                    <button type="button" class="btn btn-primary" id="backupParse">生成预览</button>
-                    <label class="backup-file-label" for="backupFile">导入 CSV / JSON</label>
-                    <input id="backupFile" type="file" accept=".csv,.json,text/csv,application/json">
-                </div>
-                <p class="backup-note">文件在浏览器本地读取，不会上传。CSV 需包含 title（歌名）表头；文件大小不超过 5 MB。</p>
-            </div>
-            <div class="flow-card backup-result" aria-live="polite">
-                <div class="backup-result-head">
-                    <div><span class="kicker">YOUR PLAYLIST</span><h3>备份预览</h3></div>
-                    <span class="preview-count" id="backupCount">0 首</span>
-                </div>
-                <p class="backup-note" id="backupStatus">读取歌单或导入曲目后，就可以预览并下载。</p>
-                <div class="backup-tracks" id="backupTracks"></div>
-                <div class="backup-export-actions">
-                    <button type="button" class="btn btn-primary" id="backupJson" disabled>下载 JSON</button>
-                    <button type="button" class="btn btn-outline" id="backupCsv" disabled>下载 CSV</button>
-                </div>
-                <p class="backup-note">JSON 保留完整原文；CSV 为防止表格公式注入，会给特殊开头的内容添加单引号。</p>
-
-                <div class="backup-divider"><span>恢复到音乐平台</span></div>
-                <div class="backup-restore">
-                    <label class="field-label" for="backupTarget">目标平台</label>
-                    <select id="backupTarget" class="text-input"></select>
-                    <p class="backup-note" id="backupTargetNote">连接目标平台后即可恢复。</p>
-                    <button type="button" class="btn btn-primary btn-block" id="backupMigrate" disabled>开始恢复迁移</button>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <section class="workspace" id="workspace">
-        <div class="section-heading">
-            <span class="kicker">MIGRATION WORKSPACE</span>
-            <h2>三步，把歌单搬过去。</h2>
-            <p>选择方向、连接目标平台、粘贴来源歌单。没有账号也可以先用演示模式跑通。</p>
-        </div>
-
-        <div class="workspace-grid">
-            <div class="flow-card">
-                <div class="flow-top">
-                    <div class="direction" aria-label="迁移方向">
-                        <div class="direction-chip" id="sourceChip">
-                            <span class="provider-dot qq"></span><span>QQ 音乐</span><small>来源 A</small>
-                        </div>
-                        <button type="button" class="swap-btn" id="swapBtn" title="交换迁移方向" aria-label="交换迁移方向">
-                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h11l-3-3m3 3-3 3M17 17H6l3 3m-3-3 3-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                        </button>
-                        <div class="direction-chip" id="targetChip">
-                            <span class="provider-dot apple"></span><span>Apple Music</span><small>目标 B</small>
-                        </div>
-                    </div>
-                    <span class="step-pill"><b>01</b> 连接目标平台</span>
-                </div>
-
-                <fieldset class="direction-options" aria-describedby="directionHelp">
-                    <legend>选择迁移方向</legend>
-                    <div class="direction-option-list">
-                        <label><input type="radio" name="directionChoice" value="QQ_APPLE" checked><span>QQ 音乐 → Apple Music</span></label>
-                        <label><input type="radio" name="directionChoice" value="APPLE_QQ"><span>Apple Music → QQ 音乐</span></label>
-                        <label><input type="radio" name="directionChoice" value="QQ_NETEASE"><span>QQ 音乐 → 网易云音乐</span></label>
-                    </div>
-                    <p id="directionHelp">QQ 与 Apple 可双向交换；网易云音乐仅支持作为目标。</p>
-                </fieldset>
-
-                <div class="provider-cards">
-                    <article class="provider-card" data-provider-card="QQ_MUSIC">
-                        <div class="provider-head">
-                            <div class="provider-icon qq">
-                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3C7 3 3 6.4 3 10.6c0 2.2 1.1 4.2 2.9 5.6-.2 1-.7 2.2-1.5 3.2 1.6-.2 3-.8 4.1-1.5.9.3 1.9.5 3 .5 5 0 9-3.4 9-7.8S17 3 12 3z" fill="currentColor" opacity=".22"/><path d="M14.8 7.4v5.8a2.5 2.5 0 1 1-1.2-2.1V9.2l-3.8.9v4.6a2.5 2.5 0 1 1-1.2-2.1V8.6l6.2-1.5z" fill="currentColor"/></svg>
-                            </div>
-                            <div class="provider-title">
-                                <h3>QQ 音乐</h3>
-                                <p>Cookie 连接 · 公开歌单免登录读取</p>
-                            </div>
-                            <button type="button" class="connect-btn" data-connect="QQ_MUSIC">连接</button>
-                        </div>
-                        <div class="provider-base">
-                            <span class="role-badge" data-role="QQ_MUSIC">来源 A</span>
-                            <span class="connection-state" id="status-QQ_MUSIC"><i></i>未连接</span>
-                        </div>
-                    </article>
-
-                    <article class="provider-card" data-provider-card="APPLE_MUSIC">
-                        <div class="provider-head">
-                            <div class="provider-icon apple">
-                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.36 1.43c0 1.14-.42 2.2-1.12 3.02-.85.99-2.24 1.75-3.36 1.66-.13-1.06.4-2.18 1.11-2.98.77-.88 2.15-1.58 3.37-1.7zM20.9 17.1c-.55 1.27-.81 1.84-1.52 2.96-.99 1.56-2.39 3.5-4.12 3.51-1.54.01-1.94-1-4.03-.99-2.09.01-2.53 1-4.07.99-1.73-.01-3.05-1.77-4.04-3.33C-.65 14.8-.9 9.27 1.52 6.32c1.2-1.47 3.1-2.4 4.89-2.4 1.82 0 2.96 1 4.47 1 1.46 0 2.35-1 4.46-1 1.6 0 3.29.87 4.49 2.37-3.95 2.16-3.31 7.8.97 9.81z" fill="currentColor"/></svg>
-                            </div>
-                            <div class="provider-title">
-                                <h3>Apple Music</h3>
-                                <p>MusicKit 授权 · 写入你的资料库</p>
-                            </div>
-                            <button type="button" class="connect-btn" data-connect="APPLE_MUSIC">连接</button>
-                        </div>
-                        <div class="provider-base">
-                            <span class="role-badge" data-role="APPLE_MUSIC">目标 B</span>
-                            <span class="connection-state" id="status-APPLE_MUSIC"><i></i>未连接</span>
-                        </div>
-                    </article>
-                    <article class="provider-card" data-provider-card="NETEASE_MUSIC">
-                        <div class="provider-head">
-                            <div class="provider-icon netease" aria-hidden="true">♫</div>
-                            <div class="provider-title">
-                                <h3>网易云音乐</h3>
-                                <p>本机 CLI · 仅作为目标</p>
-                            </div>
-                            <button type="button" class="connect-btn" data-connect="NETEASE_MUSIC">连接</button>
-                        </div>
-                        <div class="provider-base">
-                            <span class="role-badge" data-role="NETEASE_MUSIC">未选用</span>
-                            <span class="connection-state" id="status-NETEASE_MUSIC"><i></i>未连接</span>
-                        </div>
-                    </article>
-                </div>
-
-                <div class="flow-step">
-                    <div class="step-pill"><b>02</b> 粘贴来源歌单</div>
-                    <label class="field-label" for="sourceUrl">来源歌单链接</label>
-                    <div class="link-input">
-                        <span class="input-icon">
-                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.07 0l2.12-2.12a5 5 0 0 0-7.07-7.07L11 4.93m2 6.07a5 5 0 0 0-7.07 0L3.81 13.1a5 5 0 0 0 7.07 7.07l1.12-1.12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
-                        </span>
-                        <input id="sourceUrl" type="text" autocomplete="off" spellcheck="false" placeholder="粘贴 QQ 音乐 或 Apple Music 的歌单分享链接">
-                        <button type="button" class="ghost-mini" id="useSampleBtn">用示例</button>
-                    </div>
-                    <div class="link-hint">
-                        <span id="linkHint">先连接来源平台，再粘贴歌单分享链接</span>
-                        <button type="button" class="btn btn-outline btn-small" id="previewBtn">解析歌单</button>
-                    </div>
-                    <div class="preview-panel is-hidden" id="previewPanel"></div>
-                </div>
-
-                <div class="flow-step migrate-step">
-                    <div class="step-pill"><b>03</b> 开始迁移</div>
-                    <div class="migrate-options">
-                        <label class="field-label" for="playlistName">新歌单名称 <span>可选</span></label>
-                        <input id="playlistName" class="text-input" maxlength="40" placeholder="默认使用原歌单名 + 音桥">
-                    </div>
-                    <div class="migrate-actions">
-                        <p class="migrate-note" id="migrateNote" aria-live="polite">连接目标平台后即可开始</p>
-                        <button type="button" class="btn btn-primary btn-large" id="migrateBtn" disabled>
-                            <span class="btn-label">开始迁移</span>
-                            <span class="btn-arrow">→</span>
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <aside class="side-panel">
-                <div class="side-card tips-card">
-                    <span class="kicker">WHY TUNEBRIDGE</span>
-                    <h3>不是复制链接，<br>是真的重建歌单。</h3>
-                    <ul>
-                        <li><span>✓</span>逐首搜索匹配，尽量保留顺序</li>
-                        <li><span>✓</span>标注 Live / Remix 版本差异</li>
-                        <li><span>✓</span>未匹配歌曲逐条可见</li>
-                        <li><span>✓</span>网易云 CLI 登录状态可能保存在本机</li>
-                    </ul>
-                </div>
-
-                <div class="side-card demo-card">
-                    <span class="demo-badge">DEMO</span>
-                    <h3>没有账号？<br>先跑一遍。</h3>
-                    <p>内置 QQ / Apple 双曲库，完整执行匹配与创建流程，不触达真实账号。</p>
-                    <button type="button" class="btn btn-soft btn-block" id="sideDemoBtn">进入演示迁移</button>
-                </div>
-
-                <div class="side-card stat-card">
-                    <span class="stat-number" id="demoStatCount">0</span>
-                    <span class="stat-label">本次会话创建的演示歌单</span>
-                    <span class="stat-hint">QQ / Apple 演示歌单可继续作为来源</span>
-                </div>
-            </aside>
-        </div>
-    </section>
-
-    <section class="how-section" id="how">
-        <div class="section-heading centered">
-            <span class="kicker">UNDER THE HOOD</span>
-            <h2>每一步都有迹可循。</h2>
-            <p>连接、读取、搜索、匹配、写入；演示模式不触达真实账号。</p>
-        </div>
-        <div class="how-grid">
-            <article class="how-card">
-                <span class="how-index">01</span>
-                <div class="how-icon coral">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6l-8-3z" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m9 12 2 2 4-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                </div>
-                <h3>连接目标平台</h3>
-                <p>Apple Music 通过 MusicKit 授权，QQ 音乐通过 Cookie 连接。网易云真实模式使用服务器运行用户已登录的本机 CLI，不是多用户授权。</p>
-            </article>
-            <article class="how-card">
-                <span class="how-index">02</span>
-                <div class="how-icon amber">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9L12 3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
-                </div>
-                <h3>逐首智能匹配</h3>
-                <p>标题、歌手、专辑综合打分，兼容中英文、标点与 Live/Remaster 版本差异，低置信结果单独标注。</p>
-            </article>
-            <article class="how-card">
-                <span class="how-index">03</span>
-                <div class="how-icon green">
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M18 15v6m-3-3h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
-                </div>
-                <h3>写入并生成报告</h3>
-                <p>在目标平台创建新歌单、分批写入匹配歌曲，并输出成功 / 未匹配 / 低置信的逐首迁移报告。</p>
-            </article>
-        </div>
-
-        <div class="real-note">
-            <div class="real-note-copy">
-                <span class="kicker">REAL INTEGRATION</span>
-                <h3>真实接入，也保留体面的降级。</h3>
-                <p>Apple 开发者令牌或网易云本机 CLI 未配置、或 QQ 写接口触发风控时，音桥会明确提示。演示模式用于体验与展示。</p>
-            </div>
-            <div class="real-note-grid">
-                <div><span class="provider-dot qq"></span><b>QQ 音乐</b><p>公开歌单直接读取；创建歌单与批量加歌需要有效 Cookie。</p></div>
-                <div><span class="provider-dot apple"></span><b>Apple Music</b><p>需要开发者令牌 + 用户授权；写入发生在你的 iCloud 音乐资料库。</p></div>
-                <div><span class="provider-dot netease"></span><b>网易云音乐</b><p>仅作为 QQ 的目标，真实模式使用服务器运行用户已登录的本机 CLI；账号状态可能保存在本机。</p></div>
-            </div>
-        </div>
-    </section>
-</main>
-
-<footer class="site-footer">
-    <div class="footer-brand">
-        <span class="brand-mark small">
-            <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M38 12v26.1a8.4 8.4 0 1 1-4-7.2V21l-14 3.4v19.7a8.4 8.4 0 1 1-4-7.2V19l22-7z" fill="currentColor"/></svg>
-        </span>
-        <span>TuneBridge 音桥</span>
-    </div>
-    <p>仅用于个人歌单备份迁移，不提供下载或版权绕过能力。请遵守各平台服务条款。</p>
-    <div class="footer-meta">Java 21 · Spring Boot 3.4 · 2026 Qoder 高校创造力大赛</div>
-</footer>
-
-<button type="button" class="job-pill is-hidden" id="jobPill" aria-live="polite">
-    <span class="job-pill-dot"></span><span id="jobPillText">迁移进行中</span>
-</button>
-
+<button type="button" class="job-pill is-hidden" id="jobPill" aria-live="polite"><span class="job-pill-dot"></span><span id="jobPillText">迁移进行中</span></button>
 <div class="toast-container" id="toastContainer" aria-live="polite" aria-atomic="true"></div>
 <canvas id="confettiCanvas" class="confetti-canvas" aria-hidden="true"></canvas>
 
@@ -363,67 +212,25 @@
     <div class="modal-backdrop" data-close-modal></div>
     <div class="modal-card connect-card">
         <button type="button" class="modal-close" data-close-modal aria-label="关闭">×</button>
-        <div class="modal-head">
-            <div class="provider-icon large" id="connectIcon"></div>
-            <div>
-                <span class="kicker">CONNECT ACCOUNT</span>
-                <h3 id="connectTitle">连接平台</h3>
-                <p id="connectSubtitle">选择演示授权或真实账号</p>
-            </div>
-        </div>
-
-        <div class="demo-option">
-            <div>
-                <strong>演示授权</strong>
-                <p>使用内置曲库，不访问任何真实账号；请同时使用演示来源以进行完整演示。</p>
-            </div>
-            <button type="button" class="btn btn-soft" id="connectDemoBtn">一键连接</button>
-        </div>
-
+        <div class="modal-head"><div class="provider-icon large" id="connectIcon"></div><div><h3 id="connectTitle">连接平台</h3><p id="connectSubtitle">选择演示授权或真实账号</p></div></div>
+        <div class="demo-option"><div><strong>演示授权</strong><p>使用内置曲库，不访问真实账号；请同时使用演示来源。</p></div><button type="button" class="btn btn-soft" id="connectDemoBtn">一键连接</button></div>
         <div class="divider"><span>或使用真实账号</span></div>
-
         <div id="realQQ" class="real-form is-hidden">
-            <label class="field-label" for="qqCookie">y.qq.com Cookie</label>
-            <textarea id="qqCookie" class="text-area" rows="4" spellcheck="false" placeholder="粘贴完整 Cookie，例如：uin=o0123456789; qm_keyst=..."></textarea>
-            <details class="help">
-                <summary>如何获取 QQ 音乐 Cookie？</summary>
-                <ol>
-                    <li>在浏览器登录 <b>y.qq.com</b>；</li>
-                    <li>按 F12 打开开发者工具，切换到 Network；</li>
-                    <li>刷新页面，点击任意一个 y.qq.com 请求；</li>
-                    <li>在 Request Headers 中找到 <b>Cookie</b>，复制整段值粘贴到上方。</li>
-                </ol>
-                <p>票据通常 3 天左右过期。音桥只把 Cookie 存在当前会话内存中。</p>
-            </details>
+            <label class="field-label" for="qqCookie">y.qq.com Cookie</label><textarea id="qqCookie" class="text-area" rows="4" spellcheck="false" placeholder="粘贴完整 Cookie，例如：uin=o0123456789; qm_keyst=..."></textarea>
+            <details class="help"><summary>如何获取 QQ 音乐 Cookie？</summary><ol><li>在浏览器登录 <b>y.qq.com</b>；</li><li>按 F12 打开开发者工具，切换到 Network；</li><li>刷新页面，点击任意一个 y.qq.com 请求；</li><li>在 Request Headers 中找到 <b>Cookie</b>，复制整段值粘贴到上方。</li></ol><p>Cookie 的有效期由平台决定。音桥只把 Cookie 存在当前会话内存中。</p></details>
             <button type="button" class="btn btn-primary btn-block" id="connectQQReal">验证并连接</button>
         </div>
-
         <div id="realApple" class="real-form is-hidden">
-            <div class="apple-auth-box">
-                <button type="button" class="btn btn-primary btn-block" id="appleAuthBtn">通过 Apple Music 授权</button>
-                <p class="form-note" id="appleAuthNote">将打开 Apple 授权窗口，完成后自动返回音桥。</p>
-            </div>
-            <details class="help">
-                <summary>手动粘贴 Music-User-Token</summary>
-                <label class="field-label" for="appleTokenInput">Music-User-Token</label>
-                <input id="appleTokenInput" class="text-input" type="text" autocomplete="off" placeholder="粘贴 Music-User-Token">
-                <button type="button" class="btn btn-outline btn-block" id="connectAppleToken">验证并连接</button>
-            </details>
+            <div class="apple-auth-box"><button type="button" class="btn btn-primary btn-block" id="appleAuthBtn">通过 Apple Music 授权</button><p class="form-note" id="appleAuthNote">将打开 Apple 授权窗口，完成后自动返回音桥。</p></div>
+            <details class="help"><summary>手动粘贴 Music-User-Token</summary><label class="field-label" for="appleTokenInput">Music-User-Token</label><input id="appleTokenInput" class="text-input" type="text" autocomplete="off" placeholder="粘贴 Music-User-Token"><button type="button" class="btn btn-outline btn-block" id="connectAppleToken">验证并连接</button></details>
         </div>
-
         <div id="realNetease" class="real-form is-hidden">
             <p class="netease-explanation">真实模式使用服务器运行用户已登录的本机 CLI，并非多用户账号授权。配对码由本机操作员设置，不是平台 Key 或 Secret。</p>
             <p class="form-note" id="neteaseAuthNote" role="status"></p>
-            <label class="field-label" for="neteasePairingCode">本机操作员设置的配对码</label>
-            <input id="neteasePairingCode" class="text-input" type="password" autocomplete="off" spellcheck="false" aria-describedby="neteaseAuthNote" placeholder="输入配对码">
-            <button type="button" class="btn btn-primary btn-block netease-connect" id="connectNeteaseReal">验证并连接本机 CLI</button>
-            <p class="form-note">断开音桥连接不等于退出 CLI；CLI 的账号状态可能保存在服务器本机。</p>
+            <label class="field-label" for="neteasePairingCode">本机操作员设置的配对码</label><input id="neteasePairingCode" class="text-input" type="password" autocomplete="off" spellcheck="false" aria-describedby="neteaseAuthNote" placeholder="输入配对码">
+            <button type="button" class="btn btn-primary btn-block netease-connect" id="connectNeteaseReal">验证并连接本机 CLI</button><p class="form-note">断开音桥连接不等于退出 CLI；CLI 的账号状态可能保存在服务器本机。</p>
         </div>
-
-        <p class="security-note">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6l-8-3z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
-            请勿向他人透露凭据或配对码。网易云 CLI 登录状态可能保存在服务器本机，断开音桥连接不会退出 CLI。
-        </p>
+        <p class="security-note"><svg class="icon" aria-hidden="true"><use href="#icon-shield"/></svg>请勿向他人透露凭据或配对码。网易云 CLI 登录状态可能保存在服务器本机，断开音桥连接不会退出 CLI。</p>
         <button type="button" class="text-link danger is-hidden" id="disconnectBtn">断开当前平台连接</button>
     </div>
 </div>
@@ -432,26 +239,24 @@
     <div class="modal-backdrop" data-close-modal></div>
     <div class="modal-card progress-card">
         <button type="button" class="modal-close" data-close-modal aria-label="关闭">×</button>
-
         <div id="progressView">
-            <div class="progress-head">
-                <span class="kicker">MIGRATING PLAYLIST</span>
-                <h3 id="progressTitle">正在迁移歌单</h3>
-                <p id="progressStep">准备中…</p>
-            </div>
-            <div class="progress-bar">
-                <span id="progressFill"></span>
-                <b id="progressPercent">0%</b>
-            </div>
-            <div class="progress-stats">
-                <div><strong id="statMatched">0</strong><span>已匹配</span></div>
-                <div><strong id="statUnmatched">0</strong><span>未匹配</span></div>
-                <div><strong id="statTotal">0</strong><span>已处理</span></div>
-            </div>
-            <div class="live-log" id="liveLog"></div>
-            <div class="progress-error is-hidden" id="progressError"></div>
+            <div class="progress-head"><h3 id="progressTitle">正在读取与匹配歌单</h3><p id="progressStep">准备中…</p></div>
+            <div class="progress-bar"><span id="progressFill"></span><b id="progressPercent">0%</b></div>
+            <div class="progress-stats"><div><strong id="statMatched">0</strong><span>已匹配</span></div><div><strong id="statUnmatched">0</strong><span>未匹配</span></div><div><strong id="statTotal">0</strong><span>已处理</span></div></div>
+            <div class="live-log" id="liveLog" role="log" aria-label="迁移任务日志"></div><div class="progress-error is-hidden" id="progressError" role="alert"></div>
         </div>
-
+        <section id="reviewView" class="is-hidden" aria-labelledby="reviewTitle">
+            <div class="progress-head review-head"><h3 id="reviewTitle">匹配完成，等待确认</h3><p id="reviewSummary"></p></div>
+            <p class="review-write-note" id="reviewWriteNote"></p>
+            <p class="review-help" id="reviewHelp">低置信匹配默认不选，请核对版本后自行勾选；未匹配歌曲不能迁移。只使用当前匹配结果，不替换候选。</p>
+            <div class="review-tools" role="group" aria-label="批量选择歌曲"><button type="button" class="btn btn-outline btn-small" id="clearSelectionBtn">取消全选</button><button type="button" class="btn btn-outline btn-small" id="selectHighBtn">选择高置信</button><span id="reviewSelectedCount" aria-live="polite" aria-atomic="true">已选 0 首</span></div>
+            <div class="review-columns" aria-hidden="true"><span>来源歌曲</span><span>目标匹配</span></div>
+            <div class="review-list" id="reviewList" role="group" aria-label="逐首匹配选择" aria-describedby="reviewHelp"></div>
+            <div class="progress-error is-hidden" id="reviewError" role="alert"></div>
+            <div class="review-actions"><button type="button" class="btn btn-ghost" id="abandonPreviewBtn">暂不迁移</button><button type="button" class="btn btn-primary" id="confirmMigrationBtn" disabled>确认迁移 0 首</button></div>
+            <p class="review-help">关闭窗口会保留选择，可从浮动任务按钮返回；「暂不迁移」仅放弃本地只读预览，不会创建歌单，服务端预览将在到期后清理。</p>
+        </section>
+        <div class="job-status-error is-hidden" id="jobStatusError" role="alert"></div><button type="button" class="btn btn-outline btn-small is-hidden" id="refreshJobBtn">重新获取状态（只读）</button>
         <div id="resultView" class="is-hidden"></div>
     </div>
 </div>
@@ -460,22 +265,61 @@
     <div class="modal-backdrop" data-close-modal></div>
     <div class="modal-card library-card">
         <button type="button" class="modal-close" data-close-modal aria-label="关闭">×</button>
-        <div class="modal-head library-head">
-            <div>
-                <span class="kicker">DEMO LIBRARY</span>
-                <h3 id="libraryTitle">演示音乐库</h3>
-                <p>本次会话中，通过音桥创建的演示歌单。</p>
-            </div>
-        </div>
-        <div class="library-tabs" id="libraryTabs">
-            <button type="button" class="library-tab active" data-library-provider="QQ_MUSIC">QQ 音乐</button>
-            <button type="button" class="library-tab" data-library-provider="APPLE_MUSIC">Apple Music</button>
-            <button type="button" class="library-tab" data-library-provider="NETEASE_MUSIC">网易云音乐</button>
-        </div>
+        <div class="modal-head library-head"><div><h3 id="libraryTitle">演示音乐库</h3><p>本次会话中，通过音桥创建的演示歌单。</p></div></div>
+        <div class="library-tabs" id="libraryTabs" role="group" aria-label="演示音乐库平台"><button type="button" class="library-tab active" data-library-provider="QQ_MUSIC" aria-pressed="true">QQ 音乐</button><button type="button" class="library-tab" data-library-provider="APPLE_MUSIC" aria-pressed="false">Apple Music</button><button type="button" class="library-tab" data-library-provider="NETEASE_MUSIC" aria-pressed="false">网易云音乐</button></div>
         <div class="library-list" id="libraryList"></div>
     </div>
 </div>
+<div class="modal is-hidden" id="authModal" role="dialog" aria-modal="true" aria-labelledby="authTitle" aria-describedby="authDescription">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-card auth-card">
+        <button type="button" class="modal-close" data-close-modal aria-label="关闭账号窗口">×</button>
+        <div class="modal-head"><div><h3 id="authTitle">登录音桥账号</h3><p id="authDescription">这是本站 TuneBridge 账号，不是 QQ、Apple 或网易云账号。浏览介绍、本地导入和导出备份无需登录。</p></div></div>
+        <p id="authStatus" class="form-note" role="status" aria-live="polite"></p>
+        <button type="button" id="authRefreshBtn" class="btn btn-outline btn-small is-hidden">重新查询登录状态（只读）</button>
+        <div id="accountSummary" class="account-summary is-hidden"></div>
+        <div id="authTabs" class="library-tabs" role="group" aria-label="音桥账号操作">
+            <button type="button" class="library-tab active" id="authLoginTab" aria-pressed="true">登录</button>
+            <button type="button" class="library-tab is-hidden" id="authRegisterTab" aria-pressed="false">注册音桥账号</button>
+        </div>
+        <form id="authForm" class="is-hidden">
+            <label class="field-label" for="authUsername">音桥用户名</label>
+            <input id="authUsername" name="username" class="text-input" autocomplete="username" autocapitalize="none" spellcheck="false" required minlength="3" maxlength="32" pattern="[a-z0-9_]{3,32}" aria-describedby="authUsernameHelp">
+            <p class="form-note" id="authUsernameHelp">3–32 位，仅限小写英文字母、数字和下划线。</p>
+            <label class="field-label" for="authPassword">音桥密码</label>
+            <input id="authPassword" name="password" class="text-input" type="password" autocomplete="current-password" required minlength="12" maxlength="128" aria-describedby="authPasswordHelp">
+            <p class="form-note" id="authPasswordHelp">12–128 个字符。请勿填写音乐平台密码。</p>
+            <div id="registrationCodeField" class="is-hidden">
+                <label class="field-label" for="registrationCode">注册邀请码</label>
+                <input id="registrationCode" name="registrationCode" class="text-input" type="password" autocomplete="off">
+                <p class="form-note">公开服务注册需要管理员提供的邀请码。</p>
+            </div>
+            <button type="submit" class="btn btn-primary btn-block auth-submit" id="authSubmitBtn">登录音桥</button>
+        </form>
+        <p class="security-note">任务历史仅对当前音桥账号可见，历史报告只读，不保存音乐平台凭据。服务重启后需重新登录和连接平台；不会自动继续或重试写入。</p>
+    </div>
+</div>
 
+<div class="modal is-hidden" id="historyModal" role="dialog" aria-modal="true" aria-labelledby="historyTitle">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-card history-card">
+        <button type="button" class="modal-close" data-close-modal aria-label="关闭迁移历史">×</button>
+        <div class="modal-head"><div><h3 id="historyTitle">迁移历史</h3><p>当前音桥账号的只读报告。不会修改当前任务的选择，也不会创建或重试迁移。其他会话的任务仅可查看。</p></div></div>
+        <div id="historyListPanel">
+            <div id="historyList" class="history-list" aria-live="polite"></div>
+            <div class="history-pagination" aria-label="历史分页">
+                <button type="button" class="btn btn-outline btn-small" id="historyPrevBtn" disabled>上一页</button>
+                <span id="historyPageLabel" role="status"></span>
+                <button type="button" class="btn btn-outline btn-small" id="historyNextBtn" disabled>下一页</button>
+            </div>
+        </div>
+        <div id="historyDetailPanel" class="is-hidden">
+            <button type="button" class="btn btn-outline btn-small" id="historyBackBtn">返回历史列表</button>
+            <div id="historyDetail" aria-live="polite"></div>
+        </div>
+        <button type="button" class="btn btn-outline btn-small is-hidden" id="historyRetryBtn">重新获取报告（只读）</button>
+    </div>
+</div>
 <script src="/playlist-backup.js" defer></script>
 <script src="/app.js" defer></script>
 </body>
