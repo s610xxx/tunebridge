@@ -30,7 +30,8 @@ class StaticResourceAccessTest {
     @Test
     void servesEveryLocalAssetThePageLoadsToVisitorsWithoutAnAccount() throws Exception {
         List<String> assets = localAssets();
-        assertThat(assets).contains("/styles.css", "/app.js", "/playlist-backup.js", "/history-report.js");
+        assertThat(assets).contains("/styles.css", "/app.js", "/playlist-backup.js", "/playlist-batch.js",
+                "/history-report.js");
         for (String asset : assets) {
             mvc.perform(BridgeRequests.get(asset)).andExpect(status().isOk());
         }

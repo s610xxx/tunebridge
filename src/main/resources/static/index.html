@@ -29,6 +29,7 @@
     <nav class="side-nav" aria-label="主导航">
         <a class="nav-link active" href="#workspace" data-section-link aria-current="location"><svg class="icon" aria-hidden="true"><use href="#icon-transfer"/></svg><span>迁移歌单</span></a>
         <a class="nav-link" href="#backup" data-section-link><svg class="icon" aria-hidden="true"><use href="#icon-backup"/></svg><span>歌单备份</span></a>
+        <a class="nav-link" href="#batch" data-section-link><svg class="icon" aria-hidden="true"><use href="#icon-transfer"/></svg><span>批量迁移</span></a>
         <button type="button" class="nav-link" id="openLibraryBtn"><svg class="icon" aria-hidden="true"><use href="#icon-library"/></svg><span>演示音乐库</span></button>
         <button type="button" class="nav-link" id="openHistoryBtn"><svg class="icon" aria-hidden="true"><use href="#icon-backup"/></svg><span>迁移历史</span></button>
         <a class="nav-link" href="#how" data-section-link><svg class="icon" aria-hidden="true"><use href="#icon-help"/></svg><span>使用说明</span></a>
@@ -187,6 +188,43 @@
                         <p class="backup-note" id="backupTargetNote">连接目标平台后即可恢复。</p>
                         <button type="button" class="btn btn-primary btn-block" id="backupMigrate" disabled>开始恢复迁移</button>
                     </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="batch-section" id="batch" aria-labelledby="batchTitle">
+            <div class="section-heading"><div><h2 id="batchTitle">一次整理多个歌单</h2><p>列出来源账号里的歌单排队迁移，也可以粘贴多条链接。每一份仍要先匹配、再由你勾选确认才写入。</p></div><span class="section-note"><svg class="icon" aria-hidden="true"><use href="#icon-shield"/></svg>逐份确认，不自动写入</span></div>
+            <div class="batch-grid">
+                <div class="batch-form">
+                    <label class="field-label" for="batchDirection">迁移方向</label>
+                    <select id="batchDirection" class="text-input">
+                        <option value="QQ_APPLE">QQ 音乐 → Apple Music</option>
+                        <option value="APPLE_QQ">Apple Music → QQ 音乐</option>
+                        <option value="QQ_NETEASE">QQ 音乐 → 网易云音乐</option>
+                    </select>
+                    <div class="batch-source-actions">
+                        <button type="button" class="btn btn-outline" id="batchLoadBtn">读取我的歌单</button>
+                        <button type="button" class="btn btn-ghost btn-small is-hidden" id="batchSelectAllBtn">全选 / 全不选</button>
+                    </div>
+                    <p class="batch-note" id="batchSourceNote">连接来源账号后可以直接列出歌单；私有歌单是否可见取决于平台。</p>
+                    <div class="batch-source-list is-hidden" id="batchSourceList" role="group" aria-label="来源歌单"></div>
+                    <label class="field-label" for="batchLinks">或粘贴歌单链接，每行一条</label>
+                    <textarea id="batchLinks" class="text-area" rows="3" spellcheck="false" placeholder="https://y.qq.com/n/ryqq/playlist/7300098051&#10;https://y.qq.com/n/ryqq/playlist/8123456789"></textarea>
+                    <div class="batch-input-actions">
+                        <button type="button" class="btn btn-primary" id="batchAddBtn">加入队列</button>
+                        <button type="button" class="btn btn-ghost" id="batchClearBtn">清空队列</button>
+                    </div>
+                    <p class="batch-note" id="batchAddNote">单次最多排队 10 份，重复链接会自动忽略。</p>
+                </div>
+                <div class="batch-result" aria-live="polite">
+                    <div class="batch-result-head"><h3>迁移队列</h3><span class="preview-count" id="batchCount">0 份</span></div>
+                    <p class="batch-note" id="batchSummary">还没有排队中的歌单。</p>
+                    <ol class="batch-queue is-hidden" id="batchQueue"></ol>
+                    <div class="batch-actions is-hidden" id="batchActions">
+                        <button type="button" class="btn btn-primary" id="batchStartBtn">迁移下一份</button>
+                        <button type="button" class="btn btn-outline" id="batchExportBtn">导出批次小结</button>
+                    </div>
+                    <p class="batch-note" id="batchFootnote">「迁移下一份」会打开进度与审阅面板；确认写入后回到这里继续下一份。每份报告照常进入迁移历史。</p>
                 </div>
             </div>
         </section>
@@ -360,6 +398,7 @@
 </div>
 <script src="/playlist-backup.js" defer></script>
 <script src="/history-report.js" defer></script>
+<script src="/playlist-batch.js" defer></script>
 <script src="/app.js" defer></script>
 </body>
 </html>

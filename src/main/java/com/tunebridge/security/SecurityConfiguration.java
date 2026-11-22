@@ -25,7 +25,8 @@ import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 @EnableConfigurationProperties(SecurityProperties.class)
 public class SecurityConfiguration {
     private static final String[] STATIC_PATHS = {
-            "/", "/index.html", "/styles.css", "/app.js", "/playlist-backup.js", "/history-report.js", "/favicon.ico"
+            "/", "/index.html", "/styles.css", "/app.js", "/playlist-backup.js", "/playlist-batch.js",
+            "/history-report.js", "/favicon.ico"
     };
     private static final String CSP = "default-src 'self'; "
             + "script-src 'self' https://js-cdn.music.apple.com; "

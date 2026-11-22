@@ -50,6 +50,9 @@
     let historyDetailId = null;
     let historyItems = [];
     let historyDetailJob = null;
+    let batchState = TuneBridgeBatch.createBatch('', '');
+    let batchSources = [];
+    let batchCurrentUrl = null;
     const HISTORY_PAGE_SIZE = 20;
     const HISTORY_EXPORT_LIMIT = 500;
     const HISTORY_EXPORT_BATCH = 50;
@@ -83,7 +86,10 @@
             'historyNextBtn', 'historyPageLabel', 'historyDetailPanel', 'historyBackBtn', 'historyDetail', 'historyRetryBtn',
             'historyFilterSource', 'historyFilterTarget', 'historyFilterStatus', 'historyFilterFrom', 'historyFilterTo',
             'historyFilterApplyBtn', 'historyFilterResetBtn', 'historyFilterNote', 'historyExportSummaryBtn',
-            'historyExportMatchesBtn', 'historyExportJsonBtn'
+            'historyExportMatchesBtn', 'historyExportJsonBtn',
+            'batchDirection', 'batchLoadBtn', 'batchSelectAllBtn', 'batchSourceNote', 'batchSourceList',
+            'batchLinks', 'batchAddBtn', 'batchClearBtn', 'batchCount', 'batchSummary',
+            'batchQueue', 'batchActions', 'batchStartBtn', 'batchExportBtn', 'batchFootnote'
         ].forEach((id) => { els[id] = $(id); });
     }
 
@@ -205,6 +211,7 @@
         sourceProvider = 'QQ_MUSIC';
         targetProvider = 'APPLE_MUSIC';
         musicKitInstance = null;
+        clearBatchUi();
         document.querySelectorAll('.modal:not(.is-hidden)').forEach((modal) => closeModal(modal, { silent: true, keepPill: true }));
         clearSensitiveInputs();
         clearAuthSecrets();
@@ -641,8 +648,7 @@
         renderState();
         updateChip(els.sourceChip, sourceProvider, '来源 A', 'is-source');
         updateChip(els.targetChip, targetProvider, '目标 B', 'is-target');
-        const direction = targetProvider === 'NETEASE_MUSIC' ? 'QQ_NETEASE'
-                : sourceProvider === 'APPLE_MUSIC' ? 'APPLE_QQ' : 'QQ_APPLE';
+        const direction = batchDirectionValue(sourceProvider, targetProvider);
         document.querySelectorAll('[name="directionChoice"]').forEach((input) => {
             input.checked = input.value === direction;
         });
@@ -693,6 +699,7 @@
 
         updateHint();
         updateSampleButton();
+        syncBatchControls();
     }
 
     function updateChip(chip, provider, roleText, accentClass) {
@@ -776,6 +783,21 @@
         previewData = null;
         els.previewPanel.classList.add('is-hidden');
         els.previewPanel.innerHTML = '';
+    }
+
+    function applyDirection(value) {
+        const previousSource = sourceProvider;
+        if (value === 'QQ_NETEASE') {
+            sourceProvider = 'QQ_MUSIC';
+            targetProvider = 'NETEASE_MUSIC';
+        } else if (value === 'APPLE_QQ') {
+            sourceProvider = 'APPLE_MUSIC';
+            targetProvider = 'QQ_MUSIC';
+        } else {
+            sourceProvider = 'QQ_MUSIC';
+            targetProvider = 'APPLE_MUSIC';
+        }
+        resetSourceForDirection(previousSource !== sourceProvider);
     }
 
     function resetSourceForDirection(clearUrl) {
@@ -1417,6 +1439,7 @@
         els.jobStatusError.classList.add('is-hidden');
         els.refreshJobBtn.classList.add('is-hidden');
         renderJob(job);
+        trackBatchJob(job);
         if (job.status === 'AWAITING_CONFIRMATION') {
             jobRunning = true;
             if (confirmationState === 'accepted') confirmationState = 'uncertain';
@@ -1563,6 +1586,7 @@
     function abandonPreview() {
         if (!latestJob || latestJob.id !== currentJobId || latestJob.status !== 'AWAITING_CONFIRMATION'
                 || confirmationState !== 'idle') return;
+        const abandonedJobId = latestJob.id;
         window.clearTimeout(pollTimer);
         currentJobId = null;
         latestJob = null;
@@ -1574,6 +1598,7 @@
         hideJobPill();
         closeModal(els.progressModal, { keepPill: true });
         syncDirection();
+        skipBatchItem(abandonedJobId);
         toast('已放弃本地只读预览，未创建或写入目标歌单', 'info');
     }
 
@@ -2293,6 +2318,348 @@
         }
     }
 
+    /* ---------------- Batch queue (front-end orchestration of the single-job flow) ---------------- */
+
+    function batchDirectionValue(source, target) {
+        return target === 'NETEASE_MUSIC' ? 'QQ_NETEASE'
+                : source === 'APPLE_MUSIC' ? 'APPLE_QQ' : 'QQ_APPLE';
+    }
+
+    function batchPair() {
+        const value = els.batchDirection.value;
+        return value === 'APPLE_QQ' ? ['APPLE_MUSIC', 'QQ_MUSIC']
+                : value === 'QQ_NETEASE' ? ['QQ_MUSIC', 'NETEASE_MUSIC'] : ['QQ_MUSIC', 'APPLE_MUSIC'];
+    }
+
+    async function loadBatchSources() {
+        if (!requireLogin()) return;
+        const [source] = batchPair();
+        if (!connection(source).connected) {
+            toast(`请先连接来源平台 ${providerLabel(source)}`, 'error');
+            openConnect(source);
+            return;
+        }
+        setButtonBusy(els.batchLoadBtn, true, '正在读取…');
+        try {
+            batchSources = await api('/api/playlists?provider=' + encodeURIComponent(source));
+            renderBatchSources('');
+        } catch (error) {
+            batchSources = [];
+            renderBatchSources(error.message);
+        } finally {
+            setButtonBusy(els.batchLoadBtn, false, '读取我的歌单');
+        }
+    }
+
+    function renderBatchSources(failure) {
+        els.batchSourceList.innerHTML = '';
+        els.batchSourceList.classList.toggle('is-hidden', batchSources.length === 0);
+        els.batchSelectAllBtn.classList.toggle('is-hidden', batchSources.length === 0);
+        els.batchSelectAllBtn.textContent = '全选 / 全不选';
+        if (failure) {
+            els.batchSourceNote.textContent = `${failure}；也可以直接粘贴多条歌单链接。`;
+            return;
+        }
+        if (!batchSources.length) {
+            els.batchSourceNote.textContent = '来源账号里暂时没有可列出的歌单，可以粘贴链接。';
+            return;
+        }
+        els.batchSourceNote.textContent =
+                `已列出 ${batchSources.length} 份 ${providerLabel(batchPair()[0])} 歌单，勾选后点「加入队列」。`;
+        batchSources.forEach((item, index) => {
+            const label = document.createElement('label');
+            label.className = 'batch-source-item';
+            const box = document.createElement('input');
+            box.type = 'checkbox';
+            box.dataset.batchSourceIndex = String(index);
+            const name = document.createElement('span');
+            name.textContent = item.name || item.url;
+            const count = document.createElement('small');
+            count.textContent = item.trackCount ? `${item.trackCount} 首` : '曲目数未知';
+            label.append(box, name, count);
+            els.batchSourceList.appendChild(label);
+        });
+    }
+
+    function toggleBatchSourcesAll() {
+        const boxes = [...els.batchSourceList.querySelectorAll('input[type="checkbox"]')];
+        if (!boxes.length) return;
+        const check = boxes.some((box) => !box.checked);
+        boxes.forEach((box) => { box.checked = check; });
+    }
+
+    function addBatchEntries() {
+        const chosen = [...els.batchSourceList.querySelectorAll('input[type="checkbox"]:checked')]
+                .map((box) => batchSources[Number(box.dataset.batchSourceIndex)])
+                .filter(Boolean)
+                .map((entry) => ({ url: entry.url, label: entry.name, trackCount: entry.trackCount }));
+        const parsed = TuneBridgeBatch.parseLinks(els.batchLinks.value, TuneBridgeBatch.MAX_ITEMS);
+        const entries = chosen.concat(parsed.links.map((url) => ({ url })));
+        if (!entries.length) {
+            toast(parsed.rejected.length ? `未加入队列：${parsed.rejected[0].reason}` : '请勾选歌单或粘贴歌单链接', 'error');
+            return;
+        }
+        els.batchLinks.value = '';
+        els.batchSourceList.querySelectorAll('input[type="checkbox"]:checked').forEach((box) => { box.checked = false; });
+        const note = parsed.rejected.length ? `${parsed.rejected.length} 行未加入（${parsed.rejected[0].reason}）` : '';
+        enqueueBatch(entries, note);
+    }
+
+    function enqueueBatch(entries, extraNote) {
+        const [source, target] = batchPair();
+        if (batchState.items.length && (batchState.source !== source || batchState.target !== target)) {
+            els.batchDirection.value = batchDirectionValue(batchState.source, batchState.target);
+            toast(`队列已锁定 ${providerLabel(batchState.source)} → ${providerLabel(batchState.target)}，先清空队列再换方向`, 'error', 6000);
+            return;
+        }
+        const result = TuneBridgeBatch.enqueue({ ...batchState, source, target }, entries);
+        batchState = result.batch;
+        const parts = [];
+        if (result.added) parts.push(`已加入 ${result.added} 份`);
+        const duplicates = entries.length - result.added - result.overflow;
+        if (duplicates > 0) parts.push(`${duplicates} 份已在队列中`);
+        if (result.overflow) parts.push(`超出单次上限未加入 ${result.overflow} 份`);
+        if (extraNote) parts.push(extraNote);
+        toast(parts.length ? parts.join('，') : '这些歌单已在队列里', result.added ? 'success' : 'info', 5200);
+        renderBatch();
+    }
+
+    function removeBatchItem(url) {
+        const result = TuneBridgeBatch.removeItem(batchState, url);
+        batchState = result.batch;
+        toast(result.removed ? '已移出队列，已生成的报告不受影响' : '已有结果的歌单不能移出，请在迁移历史查看',
+                result.removed ? 'info' : 'error');
+        renderBatch();
+    }
+
+    function retryBatchItem(url) {
+        const result = TuneBridgeBatch.retryItem(batchState, url);
+        batchState = result.batch;
+        toast(result.retried ? '已重新排队，点「迁移下一份」再试一次' : '只有失败或中断的歌单可以重新排队',
+                result.retried ? 'info' : 'error');
+        renderBatch();
+    }
+
+    function clearBatchQueue() {
+        if (!batchState.items.length) return;
+        if (batchCurrentUrl) {
+            toast('当前任务处理完才能清空队列', 'error');
+            return;
+        }
+        const reported = batchState.items.filter((item) => item.status === 'COMPLETED').length;
+        if (reported && !window.confirm(`队列里有 ${reported} 份已完成，报告已存入迁移历史。确认清空队列？`)) return;
+        batchState = TuneBridgeBatch.createBatch('', '');
+        renderBatch();
+        toast(reported ? '已清空队列，报告仍可在迁移历史查看' : '已清空队列', 'info');
+    }
+
+    async function startNextBatchItem() {
+        if (!requireLogin()) return;
+        if (jobRunning) {
+            toast('请先处理当前任务，再继续队列', 'info');
+            return;
+        }
+        if (!currentLoaded) {
+            toast('需先只读查询当前任务，请稍候再试', 'info');
+            return;
+        }
+        const item = TuneBridgeBatch.nextPending(batchState);
+        if (!item) {
+            toast('队列已全部处理完', 'info');
+            return;
+        }
+        const source = batchState.source;
+        const target = batchState.target;
+        if (!connection(target).connected) {
+            toast(`请先连接目标平台 ${providerLabel(target)}`, 'error');
+            openConnect(target);
+            return;
+        }
+        if (source === 'APPLE_MUSIC' && !connection(source).connected) {
+            toast('请先连接 Apple Music 来源账号', 'error');
+            openConnect(source);
+            return;
+        }
+        if (item.url.startsWith('demo://') && !isDemo(source)) {
+            toast('演示歌单需要先用演示账号连接来源平台', 'error');
+            openConnect(source);
+            return;
+        }
+        applyDirection(batchDirectionValue(source, target));
+        batchCurrentUrl = item.url;
+        batchState = TuneBridgeBatch.markItem(batchState, item.url, TuneBridgeBatch.RUNNING);
+        renderBatch();
+        await runJob(async () => {
+            try {
+                return await api('/api/migrations', {
+                    method: 'POST',
+                    body: { sourceProvider: source, sourceUrl: item.url, targetProvider: target, playlistName: '' }
+                });
+            } catch (error) {
+                batchCurrentUrl = null;
+                batchState = TuneBridgeBatch.markItem(batchState, item.url, TuneBridgeBatch.PENDING, { note: error.message });
+                renderBatch();
+                throw error;
+            }
+        }, target);
+    }
+
+    /** Keeps the queued row in sync with the job the shared single-task lifecycle reports. */
+    function trackBatchJob(job) {
+        if (!batchCurrentUrl) return;
+        const queued = batchState.items.some((item) => item.url === batchCurrentUrl);
+        if (!queued) {
+            batchCurrentUrl = null;
+            return;
+        }
+        if (job.status === 'AWAITING_CONFIRMATION') {
+            batchState = TuneBridgeBatch.markItem(batchState, batchCurrentUrl, job.status);
+            renderBatch();
+            return;
+        }
+        if (!['COMPLETED', 'FAILED', 'INTERRUPTED'].includes(job.status)) return;
+        const result = job.result || {};
+        const created = job.createdTarget || result;
+        batchState = TuneBridgeBatch.markItem(batchState, batchCurrentUrl, job.status, {
+            writtenCount: result.addedCount || 0,
+            targetName: created.playlistName || '',
+            targetUrl: created.playlistUrl || '',
+            note: job.error || job.recoveryNotice || ''
+        });
+        batchCurrentUrl = null;
+        renderBatch();
+        const pending = TuneBridgeBatch.summary(batchState).PENDING;
+        toast(pending ? `批量队列还有 ${pending} 份，回到「批量迁移」继续下一份` : '批量队列已全部处理完',
+                pending ? 'info' : 'success', 6000);
+    }
+
+    function skipBatchItem(jobId) {
+        if (!batchCurrentUrl) return;
+        const url = batchCurrentUrl;
+        batchCurrentUrl = null;
+        if (batchState.items.some((item) => item.url === url)) {
+            batchState = TuneBridgeBatch.markItem(batchState, url, TuneBridgeBatch.SKIPPED,
+                    { note: '已放弃本次预览，未写入' });
+        }
+        renderBatch();
+        releaseSkippedPreview(jobId);
+    }
+
+    // A queued batch cannot continue while an abandoned preview still holds the single active task slot.
+    async function releaseSkippedPreview(jobId) {
+        if (!jobId) return;
+        try {
+            await api('/api/migrations/' + encodeURIComponent(jobId) + '/abandon', { method: 'POST' });
+            toast('已释放该预览，可继续队列下一份', 'info');
+        } catch (error) {
+            toast(`预览任务未能释放：${error.message}。该任务到期或处理后才能继续下一份`, 'error', 7000);
+        }
+    }
+
+    function exportBatchSummary() {
+        if (!batchState.items.length) {
+            toast('队列里还没有歌单', 'error');
+            return;
+        }
+        const now = new Date();
+        const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        const label = `${providerLabel(batchState.source)}到${providerLabel(batchState.target)}`;
+        try {
+            const name = safeFileName(`音桥批量迁移-${label}-${day}`, '音桥批量迁移');
+            downloadFile(`${name}.csv`, '﻿' + TuneBridgeBatch.summaryCsv(batchState, historyDate), 'text/csv;charset=utf-8');
+            toast('批次小结已导出，逐份报告仍可在迁移历史查看', 'success', 5000);
+        } catch (error) {
+            toast(error.message || '导出失败', 'error');
+        }
+    }
+
+    function renderBatch() {
+        const totals = TuneBridgeBatch.summary(batchState);
+        els.batchCount.textContent = `${totals.total} 份`;
+        els.batchQueue.innerHTML = '';
+        els.batchQueue.classList.toggle('is-hidden', !totals.total);
+        els.batchActions.classList.toggle('is-hidden', !totals.total);
+        els.batchDirection.disabled = totals.total > 0;
+        els.batchFootnote.classList.toggle('is-hidden', !totals.total);
+        if (!totals.total) {
+            els.batchSummary.textContent = '还没有排队中的歌单。';
+            return;
+        }
+        els.batchSummary.textContent = `${providerLabel(batchState.source)} → ${providerLabel(batchState.target)} · `
+                + `已完成 ${totals.COMPLETED} · 失败 ${totals.FAILED} · 跳过 ${totals.SKIPPED} · 排队 ${totals.PENDING} · `
+                + `共写入 ${totals.writtenTracks} 首`
+                + (totals.finished ? ' · 本批已处理完' : '');
+        batchState.items.forEach((item) => {
+            const row = document.createElement('li');
+            row.className = `batch-item is-${String(item.status).toLowerCase()}`;
+            const main = document.createElement('div');
+            main.className = 'batch-item-main';
+            const title = document.createElement('b');
+            title.textContent = item.label || item.url;
+            const meta = document.createElement('small');
+            meta.textContent = (item.trackCount ? `${item.trackCount} 首 · ` : '')
+                    + (item.note || item.url);
+            main.append(title, meta);
+            const badge = document.createElement('span');
+            badge.className = `batch-badge is-${String(item.status).toLowerCase()}`;
+            badge.textContent = TuneBridgeBatch.statusLabel(item.status);
+            const side = document.createElement('div');
+            side.className = 'batch-item-side';
+            const link = safeHttpUrl(item.targetUrl);
+            if (link) {
+                const anchor = document.createElement('a');
+                anchor.href = link;
+                anchor.target = '_blank';
+                anchor.rel = 'noopener noreferrer';
+                anchor.textContent = item.targetName || '打开目标歌单';
+                side.appendChild(anchor);
+            }
+            if (item.status === 'COMPLETED') {
+                const written = document.createElement('small');
+                written.textContent = `${item.writtenCount || 0} 首已写入`;
+                side.appendChild(written);
+            }
+            if (TuneBridgeBatch.RETRYABLE.includes(item.status)) {
+                const retry = document.createElement('button');
+                retry.type = 'button';
+                retry.className = 'text-link';
+                retry.textContent = '重新排队';
+                retry.dataset.batchRetry = item.url;
+                side.appendChild(retry);
+            }
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'text-link';
+            remove.textContent = '移出队列';
+            remove.dataset.batchRemove = item.url;
+            remove.disabled = !TuneBridgeBatch.REMOVABLE.includes(item.status);
+            side.appendChild(remove);
+            row.append(main, badge, side);
+            els.batchQueue.appendChild(row);
+        });
+        syncBatchControls();
+    }
+
+    // The shared job can start or free up without a queue change, so keep the button honest.
+    function syncBatchControls() {
+        const pending = TuneBridgeBatch.summary(batchState).PENDING;
+        els.batchStartBtn.disabled = jobRunning || Boolean(batchCurrentUrl) || !pending;
+        els.batchStartBtn.textContent = batchCurrentUrl ? '当前任务处理中…'
+                : pending ? `迁移下一份（剩 ${pending}）` : (batchState.items.length ? '本批已处理完' : '迁移下一份');
+    }
+
+    function clearBatchUi() {
+        batchState = TuneBridgeBatch.createBatch('', '');
+        batchSources = [];
+        batchCurrentUrl = null;
+        els.batchSourceList.innerHTML = '';
+        els.batchSourceList.classList.add('is-hidden');
+        els.batchSelectAllBtn.classList.add('is-hidden');
+        els.batchSourceNote.textContent = '连接来源账号后可以直接列出歌单；私有歌单是否可见取决于平台。';
+        els.batchLinks.value = '';
+        renderBatch();
+    }
+
     /* ---------------- Confetti ---------------- */
 
     function launchConfetti() {
@@ -2376,20 +2743,36 @@
         });
 
         document.querySelectorAll('[name="directionChoice"]').forEach((input) => {
-            input.addEventListener('change', () => {
-                const previousSource = sourceProvider;
-                if (input.value === 'QQ_NETEASE') {
-                    sourceProvider = 'QQ_MUSIC';
-                    targetProvider = 'NETEASE_MUSIC';
-                } else if (input.value === 'APPLE_QQ') {
-                    sourceProvider = 'APPLE_MUSIC';
-                    targetProvider = 'QQ_MUSIC';
-                } else {
-                    sourceProvider = 'QQ_MUSIC';
-                    targetProvider = 'APPLE_MUSIC';
-                }
-                resetSourceForDirection(previousSource !== sourceProvider);
-            });
+            input.addEventListener('change', () => applyDirection(input.value));
+        });
+
+        els.batchDirection.addEventListener('change', () => {
+            if (batchState.items.length) {
+                els.batchDirection.value = batchDirectionValue(batchState.source, batchState.target);
+                toast('队列已锁定方向，清空后才能更换', 'error');
+                return;
+            }
+            batchState = TuneBridgeBatch.createBatch('', '');
+            batchSources = [];
+            els.batchSourceList.innerHTML = '';
+            els.batchSourceList.classList.add('is-hidden');
+            els.batchSelectAllBtn.classList.add('is-hidden');
+            els.batchSourceNote.textContent = '连接来源账号后可以直接列出歌单；私有歌单是否可见取决于平台。';
+        });
+        els.batchLoadBtn.addEventListener('click', loadBatchSources);
+        els.batchSelectAllBtn.addEventListener('click', toggleBatchSourcesAll);
+        els.batchAddBtn.addEventListener('click', addBatchEntries);
+        els.batchClearBtn.addEventListener('click', clearBatchQueue);
+        els.batchStartBtn.addEventListener('click', startNextBatchItem);
+        els.batchExportBtn.addEventListener('click', exportBatchSummary);
+        els.batchQueue.addEventListener('click', (event) => {
+            const retry = event.target.closest('[data-batch-retry]');
+            if (retry) {
+                retryBatchItem(retry.dataset.batchRetry);
+                return;
+            }
+            const button = event.target.closest('[data-batch-remove]');
+            if (button) removeBatchItem(button.dataset.batchRemove);
         });
 
         els.swapBtn.addEventListener('click', () => {
@@ -2617,6 +3000,7 @@
     async function init() {
         cacheElements();
         wireEvents();
+        renderBatch();
         await refreshAuth().catch(() => { });
         if (authReady && auth.authenticated) {
             await loadSession();
