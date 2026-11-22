@@ -304,23 +304,62 @@
     <div class="modal-backdrop" data-close-modal></div>
     <div class="modal-card history-card">
         <button type="button" class="modal-close" data-close-modal aria-label="关闭迁移历史">×</button>
-        <div class="modal-head"><div><h3 id="historyTitle">迁移历史</h3><p>当前音桥账号的只读报告。不会修改当前任务的选择，也不会创建或重试迁移。其他会话的任务仅可查看。</p></div></div>
+        <div class="modal-head"><div><h3 id="historyTitle">迁移历史</h3><p>当前音桥账号的只读报告，可按平台、状态与时间筛选并导出。不会修改当前任务的选择，也不会创建或重试迁移。其他会话的任务仅可查看。</p></div></div>
         <div id="historyListPanel">
+            <div class="history-filters" role="group" aria-label="迁移历史筛选">
+                <label class="history-filter"><span>来源</span>
+                    <select id="historyFilterSource" class="text-input">
+                        <option value="">全部来源</option>
+                        <option value="QQ_MUSIC">QQ 音乐</option>
+                        <option value="APPLE_MUSIC">Apple Music</option>
+                        <option value="NETEASE_MUSIC">网易云音乐</option>
+                        <option value="LOCAL_BACKUP">本地备份</option>
+                    </select>
+                </label>
+                <label class="history-filter"><span>目标</span>
+                    <select id="historyFilterTarget" class="text-input">
+                        <option value="">全部目标</option>
+                        <option value="QQ_MUSIC">QQ 音乐</option>
+                        <option value="APPLE_MUSIC">Apple Music</option>
+                        <option value="NETEASE_MUSIC">网易云音乐</option>
+                    </select>
+                </label>
+                <label class="history-filter"><span>状态</span>
+                    <select id="historyFilterStatus" class="text-input">
+                        <option value="">全部状态</option>
+                        <option value="AWAITING_CONFIRMATION">等待确认</option>
+                        <option value="COMPLETED">已完成</option>
+                        <option value="FAILED">失败</option>
+                        <option value="INTERRUPTED">已中断</option>
+                    </select>
+                </label>
+                <label class="history-filter"><span>起始日期</span><input id="historyFilterFrom" class="text-input" type="date"></label>
+                <label class="history-filter"><span>结束日期</span><input id="historyFilterTo" class="text-input" type="date"></label>
+                <button type="button" class="btn btn-primary btn-small" id="historyFilterApplyBtn">筛选</button>
+                <button type="button" class="btn btn-outline btn-small" id="historyFilterResetBtn">重置</button>
+            </div>
+            <p class="history-filter-note" id="historyFilterNote" role="status"></p>
             <div id="historyList" class="history-list" aria-live="polite"></div>
             <div class="history-pagination" aria-label="历史分页">
-                <button type="button" class="btn btn-outline btn-small" id="historyPrevBtn" disabled>上一页</button>
+                <span><button type="button" class="btn btn-outline btn-small" id="historyPrevBtn" disabled>上一页</button>
                 <span id="historyPageLabel" role="status"></span>
-                <button type="button" class="btn btn-outline btn-small" id="historyNextBtn" disabled>下一页</button>
+                <button type="button" class="btn btn-outline btn-small" id="historyNextBtn" disabled>下一页</button></span>
+                <button type="button" class="btn btn-outline btn-small" id="historyExportSummaryBtn" disabled>导出当前筛选（CSV）</button>
             </div>
         </div>
         <div id="historyDetailPanel" class="is-hidden">
-            <button type="button" class="btn btn-outline btn-small" id="historyBackBtn">返回历史列表</button>
+            <div class="history-detail-actions">
+                <button type="button" class="btn btn-outline btn-small" id="historyBackBtn">返回历史列表</button>
+                <span><button type="button" class="btn btn-outline btn-small" id="historyExportMatchesBtn" disabled>导出逐首结果（CSV）</button>
+                <button type="button" class="btn btn-outline btn-small" id="historyExportJsonBtn" disabled>导出报告（JSON）</button></span>
+            </div>
             <div id="historyDetail" aria-live="polite"></div>
         </div>
         <button type="button" class="btn btn-outline btn-small is-hidden" id="historyRetryBtn">重新获取报告（只读）</button>
     </div>
 </div>
 <script src="/playlist-backup.js" defer></script>
+<script src="/history-report.js" defer></script>
 <script src="/app.js" defer></script>
 </body>
 </html>

@@ -74,8 +74,6 @@ public class MigrationService {
         }
 
         cleanup();
-
-        cleanup();
         MusicProvider source = providerRegistry.get(sourceProvider);
         String url = sourceUrl.trim();
         return submitJob(session, ownerId, sourceProvider, targetProvider, url,
@@ -162,9 +160,10 @@ public class MigrationService {
         return history.find(ownerId, jobId);
     }
 
-    public MigrationHistory.Page listHistory(String ownerId, int offset, int limit) {
+    public MigrationHistory.Page listHistory(String ownerId, int offset, int limit,
+                                             MigrationHistory.Filters filters) {
         cleanup();
-        return history.list(ownerId, offset, limit);
+        return history.list(ownerId, offset, limit, filters);
     }
 
     public JobView currentJob(HttpSession session, String ownerId) {

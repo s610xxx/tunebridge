@@ -48,6 +48,11 @@
     let historyHasMore = false;
     let historySeq = 0;
     let historyDetailId = null;
+    let historyItems = [];
+    let historyDetailJob = null;
+    const HISTORY_PAGE_SIZE = 20;
+    const HISTORY_EXPORT_LIMIT = 500;
+    const HISTORY_EXPORT_BATCH = 50;
 
     const $ = (id) => document.getElementById(id);
 
@@ -75,7 +80,10 @@
             'accountSummary', 'authTabs', 'authLoginTab', 'authRegisterTab', 'authForm', 'authUsername',
             'authPassword', 'registrationCodeField', 'registrationCode', 'authSubmitBtn', 'restoreCurrentBtn',
             'openHistoryBtn', 'historyModal', 'historyListPanel', 'historyList', 'historyPrevBtn',
-            'historyNextBtn', 'historyPageLabel', 'historyDetailPanel', 'historyBackBtn', 'historyDetail', 'historyRetryBtn'
+            'historyNextBtn', 'historyPageLabel', 'historyDetailPanel', 'historyBackBtn', 'historyDetail', 'historyRetryBtn',
+            'historyFilterSource', 'historyFilterTarget', 'historyFilterStatus', 'historyFilterFrom', 'historyFilterTo',
+            'historyFilterApplyBtn', 'historyFilterResetBtn', 'historyFilterNote', 'historyExportSummaryBtn',
+            'historyExportMatchesBtn', 'historyExportJsonBtn'
         ].forEach((id) => { els[id] = $(id); });
     }
 
@@ -216,6 +224,9 @@
         historyOffset = 0;
         historyHasMore = false;
         historyDetailId = null;
+        historyItems = [];
+        historyDetailJob = null;
+        resetHistoryFilters();
         els.toastContainer.replaceChildren();
         els.demoStatCount.textContent = '0';
         els.restoreCurrentBtn.classList.add('is-hidden');
@@ -967,22 +978,30 @@
         }
     }
 
-    function downloadBackup(format) {
-        if (!backupData) return;
-        const name = els.backupName.value.trim() || '我的歌单';
-        const fileName = name.replace(/[\u0000-\u001f<>:"/\\|?*]/g, '_').replace(/[. ]+$/, '') || '歌单备份';
-        const content = format === 'csv'
-                ? '\uFEFF' + TuneBridgeBackup.serializeCsv(backupData)
-                : TuneBridgeBackup.serializeJson({ name, tracks: backupData });
-        const type = format === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8';
+    function safeFileName(value, fallback) {
+        return String(value).replace(/[\u0000-\u001f<>:"/\\|?*]/g, '_').replace(/[. ]+$/, '') || fallback;
+    }
+
+    function downloadFile(fileName, content, type) {
         const url = URL.createObjectURL(new Blob([content], { type }));
         const link = document.createElement('a');
         link.href = url;
-        link.download = `${fileName}.${format}`;
+        link.download = fileName;
         document.body.appendChild(link);
         link.click();
         link.remove();
         window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function downloadBackup(format) {
+        if (!backupData) return;
+        const name = els.backupName.value.trim() || '我的歌单';
+        const fileName = safeFileName(name, '歌单备份');
+        const content = format === 'csv'
+                ? '\uFEFF' + TuneBridgeBackup.serializeCsv(backupData)
+                : TuneBridgeBackup.serializeJson({ name, tracks: backupData });
+        const type = format === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8';
+        downloadFile(`${fileName}.${format}`, content, type);
     }
 
     function renderBackupTargets() {
@@ -2061,7 +2080,10 @@
     async function loadHistory(offset = historyOffset) {
         if (!requireLogin()) return;
         const seq = ++historySeq;
+        const filters = readHistoryFilters();
         historyDetailId = null;
+        historyDetailJob = null;
+        historyItems = [];
         historyOffset = offset;
         historyHasMore = false;
         els.historyListPanel.classList.remove('is-hidden');
@@ -2070,27 +2092,38 @@
         els.historyRetryBtn.classList.add('is-hidden');
         els.historyPrevBtn.disabled = true;
         els.historyNextBtn.disabled = true;
+        setHistoryExportEnabled(false);
+        setHistoryDetailExportEnabled(false);
         els.historyPageLabel.textContent = '正在加载…';
         els.historyList.innerHTML = '<div class="library-empty">正在读取迁移历史…</div>';
         els.historyList.setAttribute('aria-busy', 'true');
+        renderHistoryFilterNote(filters, null);
         try {
-            const page = await api(`/api/migrations?offset=${offset}&limit=20`);
+            const page = await api(historyQuery(offset, HISTORY_PAGE_SIZE, filters));
             if (seq !== historySeq) return;
             if (!page || !Array.isArray(page.items)) throw new Error('历史列表响应无效');
+            historyItems = page.items;
             historyHasMore = page.hasMore === true;
-            els.historyList.innerHTML = page.items.map((job) => {
+            els.historyList.innerHTML = historyItems.map((job) => {
                 const stats = reportStats(job);
                 return `<article class="history-item"><div class="history-item-head"><h4>${escapeHtml(job.source?.name || '来源歌单尚未读取')}</h4>
                     <span class="history-badge ${['FAILED', 'INTERRUPTED'].includes(job.status) ? 'is-warning' : ''}">${escapeHtml(historyStatus(job.status))} · 只读</span></div>
                     <time>${escapeHtml(historyDate(job.createdAt))}</time><p>${escapeHtml(reportDirection(job))}</p>
                     <p>共 ${escapeHtml(stats.total)} 首 · 匹配 ${stats.matched} · 已选 ${stats.selected} · 跳过 ${stats.skipped} · 未匹配 ${stats.unmatched} · 确认写入 ${stats.added === null ? '未知' : escapeHtml(stats.added)}</p>
                     <button type="button" class="btn btn-outline btn-small" data-history-id="${escapeHtml(job.id)}">查看只读报告</button></article>`;
-            }).join('') || `<div class="library-empty"><strong>${offset ? '本页没有记录' : '还没有迁移历史'}</strong><span>完成匹配后，任务报告会保存在你的音桥账号下。</span></div>`;
-            els.historyPageLabel.textContent = `第 ${Math.floor(offset / 20) + 1} 页`;
+            }).join('') || `<div class="library-empty"><strong>${
+                offset ? '本页没有记录' : hasHistoryFilters(filters) ? '没有符合筛选条件的报告' : '还没有迁移历史'
+            }</strong><span>${hasHistoryFilters(filters)
+                ? '换个平台、状态或时间范围，或点「重置」查看全部历史。'
+                : '完成匹配后，任务报告会保存在你的音桥账号下。'}</span></div>`;
+            els.historyPageLabel.textContent = `第 ${Math.floor(offset / HISTORY_PAGE_SIZE) + 1} 页`;
+            setHistoryExportEnabled(historyItems.length > 0);
+            renderHistoryFilterNote(filters, historyItems.length);
         } catch (error) {
             if (seq !== historySeq) return;
             els.historyList.innerHTML = `<div class="library-empty"><strong>历史加载失败</strong><span>${escapeHtml(error.message)}</span></div>`;
             els.historyPageLabel.textContent = '加载失败';
+            els.historyFilterNote.textContent = '';
             els.historyRetryBtn.classList.remove('is-hidden');
         } finally {
             if (seq === historySeq) {
@@ -2105,9 +2138,11 @@
         if (!requireLogin()) return;
         const seq = ++historySeq;
         historyDetailId = id;
+        historyDetailJob = null;
         els.historyListPanel.classList.add('is-hidden');
         els.historyDetailPanel.classList.remove('is-hidden');
         els.historyRetryBtn.classList.add('is-hidden');
+        setHistoryDetailExportEnabled(false);
         els.historyDetail.innerHTML = '<div class="library-empty">正在读取只读报告…</div>';
         els.historyBackBtn.focus({ preventScroll: true });
         try {
@@ -2115,11 +2150,146 @@
             if (seq !== historySeq) return;
             if (!job || job.id !== id) throw new Error('报告响应无效');
             // Never call acceptJob here: history must not alter the live task or its selection.
+            historyDetailJob = job;
             els.historyDetail.innerHTML = reportMarkup(job);
+            setHistoryDetailExportEnabled(true);
         } catch (error) {
             if (seq !== historySeq) return;
             els.historyDetail.innerHTML = `<div class="library-empty"><strong>报告加载失败</strong><span>${escapeHtml(error.message)}</span></div>`;
             els.historyRetryBtn.classList.remove('is-hidden');
+        }
+    }
+
+    function readHistoryFilters() {
+        return {
+            source: els.historyFilterSource.value,
+            target: els.historyFilterTarget.value,
+            status: els.historyFilterStatus.value,
+            from: els.historyFilterFrom.value,
+            to: els.historyFilterTo.value
+        };
+    }
+
+    function hasHistoryFilters(filters) {
+        return Object.values(filters).some((value) => Boolean(value));
+    }
+
+    function historyQuery(offset, limit, filters) {
+        const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+        Object.entries(filters).forEach(([key, value]) => {
+            if (value) {
+                params.set(key, value);
+            }
+        });
+        return `/api/migrations?${params.toString()}`;
+    }
+
+    function renderHistoryFilterNote(filters, count) {
+        if (count === null) {
+            els.historyFilterNote.textContent = '';
+            return;
+        }
+        const labels = [];
+        if (filters.source) {
+            labels.push('来源：' + (filters.source === 'LOCAL_BACKUP' ? '本地备份' : providerLabel(filters.source)));
+        }
+        if (filters.target) {
+            labels.push('目标：' + providerLabel(filters.target));
+        }
+        if (filters.status) {
+            labels.push('状态：' + historyStatus(filters.status));
+        }
+        if (filters.from) {
+            labels.push('起：' + filters.from);
+        }
+        if (filters.to) {
+            labels.push('止：' + filters.to);
+        }
+        els.historyFilterNote.textContent = labels.length
+            ? `筛选条件 · ${labels.join(' · ')} · 本页 ${count} 份报告${count === HISTORY_PAGE_SIZE ? '（还有下一页）' : ''}`
+            : `本页 ${count} 份报告 · 只读，导出不会影响任何平台数据。`;
+    }
+
+    function setHistoryExportEnabled(enabled) {
+        els.historyExportSummaryBtn.disabled = !enabled;
+    }
+
+    function setHistoryDetailExportEnabled(enabled) {
+        els.historyExportMatchesBtn.disabled = !enabled;
+        els.historyExportJsonBtn.disabled = !enabled;
+    }
+
+    function applyHistoryFilters() {
+        loadHistory(0);
+    }
+
+    function resetHistoryFilters() {
+        ['historyFilterSource', 'historyFilterTarget', 'historyFilterStatus', 'historyFilterFrom', 'historyFilterTo']
+            .forEach((id) => {
+                if (els[id]) {
+                    els[id].value = '';
+                }
+            });
+        if (els.historyFilterNote) {
+            els.historyFilterNote.textContent = '';
+        }
+        setHistoryExportEnabled(false);
+    }
+
+    async function exportHistorySummary() {
+        const seq = historySeq;
+        const filters = readHistoryFilters();
+        setButtonBusy(els.historyExportSummaryBtn, true, '正在导出…');
+        try {
+            const items = [];
+            while (items.length < HISTORY_EXPORT_LIMIT) {
+                const page = await api(historyQuery(items.length, HISTORY_EXPORT_BATCH, filters));
+                const batch = page && Array.isArray(page.items) ? page.items : [];
+                items.push(...batch);
+                if (!batch.length || !page.hasMore) {
+                    break;
+                }
+            }
+            if (seq !== historySeq) {
+                return;
+            }
+            if (!items.length) {
+                toast('当前筛选条件下没有可导出的历史', 'warn');
+                return;
+            }
+            const now = new Date();
+            const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+            downloadFile(safeFileName(`音桥迁移历史-${stamp}`, '音桥迁移历史') + '.csv',
+                '\uFEFF' + TuneBridgeHistoryReport.summaryCsv(items, historyDate), 'text/csv;charset=utf-8');
+            els.historyFilterNote.textContent = items.length >= HISTORY_EXPORT_LIMIT
+                ? `已导出最近 ${HISTORY_EXPORT_LIMIT} 份报告；更早的记录请缩小时间范围后再导出。`
+                : `已导出 ${items.length} 份报告摘要。`;
+        } catch (error) {
+            if (seq === historySeq) {
+                toast(error.message || '导出失败', 'error');
+            }
+        } finally {
+            if (seq === historySeq) {
+                setButtonBusy(els.historyExportSummaryBtn, false);
+            }
+        }
+    }
+
+    function exportHistoryDetail(format) {
+        if (!historyDetailJob) {
+            return;
+        }
+        try {
+            const name = safeFileName(`迁移报告-${historyDetailJob.id}`, '迁移报告');
+            if (format === 'json') {
+                downloadFile(`${name}.json`, TuneBridgeHistoryReport.reportJson(historyDetailJob),
+                    'application/json;charset=utf-8');
+                return;
+            }
+            downloadFile(`${name}.csv`, '\uFEFF' + TuneBridgeHistoryReport.matchesCsv(historyDetailJob),
+                'text/csv;charset=utf-8');
+        } catch (error) {
+            toast(error.message || '导出失败', 'error');
         }
     }
 
@@ -2334,12 +2504,27 @@
                 loadHistoryDetail(button.dataset.historyId);
             }
         });
-        els.historyPrevBtn.addEventListener('click', () => loadHistory(Math.max(0, historyOffset - 20)));
-        els.historyNextBtn.addEventListener('click', () => loadHistory(historyOffset + 20));
+        els.historyPrevBtn.addEventListener('click', () => loadHistory(Math.max(0, historyOffset - HISTORY_PAGE_SIZE)));
+        els.historyNextBtn.addEventListener('click', () => loadHistory(historyOffset + HISTORY_PAGE_SIZE));
         els.historyBackBtn.addEventListener('click', () => loadHistory());
         els.historyRetryBtn.addEventListener('click', () => {
             if (historyDetailId) loadHistoryDetail(historyDetailId); else loadHistory();
         });
+        els.historyFilterApplyBtn.addEventListener('click', applyHistoryFilters);
+        els.historyFilterResetBtn.addEventListener('click', () => {
+            resetHistoryFilters();
+            loadHistory(0);
+        });
+        [els.historyFilterSource, els.historyFilterTarget, els.historyFilterStatus]
+            .forEach((select) => select.addEventListener('change', applyHistoryFilters));
+        [els.historyFilterFrom, els.historyFilterTo].forEach((input) => input.addEventListener('change', () => {
+            if (input.value) {
+                applyHistoryFilters();
+            }
+        }));
+        els.historyExportSummaryBtn.addEventListener('click', exportHistorySummary);
+        els.historyExportMatchesBtn.addEventListener('click', () => exportHistoryDetail('csv'));
+        els.historyExportJsonBtn.addEventListener('click', () => exportHistoryDetail('json'));
 
         els.libraryTabs.addEventListener('click', (event) => {
             const tab = event.target.closest('[data-library-provider]');

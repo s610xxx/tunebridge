@@ -183,8 +183,14 @@ public class ApiController {
 
     @GetMapping("/migrations")
     public MigrationHistory.Page history(@RequestParam(defaultValue = "0") int offset,
-                                         @RequestParam(defaultValue = "20") int limit) {
-        return migrationService.listHistory(CurrentUser.id(), offset, limit);
+                                         @RequestParam(defaultValue = "20") int limit,
+                                         @RequestParam(required = false) String source,
+                                         @RequestParam(required = false) String target,
+                                         @RequestParam(required = false) String status,
+                                         @RequestParam(required = false) String from,
+                                         @RequestParam(required = false) String to) {
+        return migrationService.listHistory(CurrentUser.id(), offset, limit,
+                MigrationHistory.Filters.of(source, target, status, from, to));
     }
 
     @GetMapping("/migrations/current")

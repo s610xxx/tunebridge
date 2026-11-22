@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tunebridge.domain.ConnectionMode;
+import com.tunebridge.domain.CreatedPlaylist;
 import com.tunebridge.domain.MigrationJob;
 import com.tunebridge.domain.Playlist;
 import com.tunebridge.domain.ProviderConnection;
@@ -18,6 +19,8 @@ import com.tunebridge.service.MigrationHistory;
 import com.tunebridge.service.MigrationService;
 import com.tunebridge.testsupport.BridgeRequests;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -154,6 +157,45 @@ class MigrationHistoryApiTest {
     }
 
     @Test
+    void filtersHistoryThroughTheApiWithoutLeakingAcrossAccounts() throws Exception {
+        storedPreview("mig_api_qq_to_apple");
+        storedBackupJob("mig_api_backup_to_qq");
+        storedCompletedJob("mig_api_completed");
+
+        assertThat(ids(getJson("/api/migrations?source=QQ_MUSIC")))
+                .containsExactlyInAnyOrder("mig_api_qq_to_apple", "mig_api_completed");
+        assertThat(ids(getJson("/api/migrations?source=LOCAL_BACKUP&target=QQ_MUSIC")))
+                .containsExactly("mig_api_backup_to_qq");
+        assertThat(ids(getJson("/api/migrations?status=AWAITING_CONFIRMATION&target=APPLE_MUSIC")))
+                .containsExactly("mig_api_qq_to_apple");
+        assertThat(ids(getJson("/api/migrations?from=" + LocalDate.now(ZoneOffset.UTC)
+                + "&to=" + LocalDate.now(ZoneOffset.UTC).plusDays(1))))
+                .hasSize(3);
+        assertThat(ids(getJson("/api/migrations?from=" + LocalDate.now(ZoneOffset.UTC).plusDays(1)))).isEmpty();
+
+        AccountPrincipal neighbour = account();
+        assertThat(getJson("/api/migrations?source=QQ_MUSIC", neighbour, new MockHttpSession()).path("items"))
+                .isEmpty();
+    }
+
+    @Test
+    void rejectsFilterValuesItCannotMapOntoAProviderOrStatus() throws Exception {
+        List<String> queries = List.of(
+                "source=SPOTIFY",
+                "target=LOCAL_BACKUP",
+                "status=MIGRATED",
+                "from=last-month",
+                "to=2026-13-45",
+                "from=" + LocalDate.now(ZoneOffset.UTC).plusDays(1) + "&to=" + LocalDate.now(ZoneOffset.UTC));
+        for (String query : queries) {
+            MvcResult rejected = mvc.perform(BridgeRequests.as(
+                            BridgeRequests.get("/api/migrations?" + query).session(new MockHttpSession()), principal))
+                    .andExpect(status().isBadRequest()).andReturn();
+            assertThat(readBody(rejected).path("code").asText()).as(query).isEqualTo("INVALID_INPUT");
+        }
+    }
+
+    @Test
     void rejectsPaginationThatWouldNotFitAReasonableRequest() throws Exception {
         for (String query : List.of("offset=-1", "limit=0", "limit=51", "offset=100001")) {
             MvcResult rejected = mvc.perform(BridgeRequests.as(
@@ -185,16 +227,44 @@ class MigrationHistoryApiTest {
 
     /** Persists a matched-but-never-confirmed job without registering it with the live service. */
     private String storedPreview(String jobId) {
-        MigrationJob job = new MigrationJob(jobId, "session-old", ownerId, ProviderId.QQ_MUSIC,
-                ProviderId.APPLE_MUSIC, "demo://builtin", "夏夜循环", new ProviderConnection(
-                        ProviderId.APPLE_MUSIC, ConnectionMode.DEMO, "demo", Map.of()), history::save);
-        Track source = Track.of("dq-1", "晴天", "周杰伦", "叶惠美", 269);
-        Track target = new Track("1440857792", "晴天", "周杰伦", "叶惠美", 269, "", 0);
+        return storedJob(jobId, ProviderId.QQ_MUSIC, ProviderId.APPLE_MUSIC, null, false);
+    }
+
+    private String storedBackupJob(String jobId) {
+        return storedJob(jobId, ProviderId.QQ_MUSIC, ProviderId.QQ_MUSIC, "本地备份", false);
+    }
+
+    private String storedCompletedJob(String jobId) {
+        return storedJob(jobId, ProviderId.QQ_MUSIC, ProviderId.APPLE_MUSIC, null, true);
+    }
+
+    private String storedJob(String jobId, ProviderId source, ProviderId target, String sourceLabel,
+                             boolean complete) {
+        ProviderConnection connection = new ProviderConnection(target, ConnectionMode.DEMO, "demo", Map.of());
+        MigrationJob job = sourceLabel == null
+                ? new MigrationJob(jobId, "session-old", ownerId, source, target, "demo://builtin", "夏夜循环",
+                        connection, history::save)
+                : new MigrationJob(jobId, "session-old", ownerId, source, target, "backup://local", "夏夜循环",
+                        sourceLabel, connection, history::save);
+        Track sourceTrack = Track.of("dq-1", "晴天", "周杰伦", "叶惠美", 269);
+        Track targetTrack = new Track("1440857792", "晴天", "周杰伦", "叶惠美", 269, "", 0);
         job.start();
-        job.sourceLoaded(new Playlist("demo-qq", "夏夜循环", "", "", "阿桥", "demo://builtin", List.of(source)));
-        job.addMatch(TrackMatch.matched(source, target, 0.91, false, "标题与歌手一致"), target);
+        job.sourceLoaded(new Playlist("demo-qq", "夏夜循环", "", "", "阿桥", "demo://builtin", List.of(sourceTrack)));
+        job.addMatch(TrackMatch.matched(sourceTrack, targetTrack, 0.91, false, "标题与歌手一致"), targetTrack);
         job.awaitConfirmation();
+        if (complete) {
+            job.confirm(List.of(0));
+            job.beginWrite();
+            job.targetCreated(new CreatedPlaylist("pl-old", "夏夜循环", "url", 0, Map.of()));
+            job.complete(new CreatedPlaylist("pl-old", "夏夜循环", "url", 1, Map.of()));
+        }
         return jobId;
+    }
+
+    private List<String> ids(JsonNode page) {
+        List<String> ids = new java.util.ArrayList<>();
+        page.path("items").forEach(item -> ids.add(item.path("id").asText()));
+        return ids;
     }
 
     private JsonNode awaitStatus(MockHttpSession session, String jobId, String expected) throws Exception {
