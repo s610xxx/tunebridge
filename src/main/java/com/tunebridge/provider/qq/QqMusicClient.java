@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.tunebridge.config.TuneBridgeProperties;
 import com.tunebridge.domain.CreatedPlaylist;
 import com.tunebridge.domain.Playlist;
+import com.tunebridge.domain.PlaylistRef;
 import com.tunebridge.domain.Track;
 import com.tunebridge.provider.ProviderException;
 import java.util.ArrayList;
@@ -36,6 +37,7 @@ public class QqMusicClient {
     private static final String PLAYLIST_URL =
             "https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg";
     private static final String SMARTBOX_URL = "https://c.y.qq.com/splcloud/fcgi-bin/smartbox_new.fcg";
+    private static final String CREATED_DISS_URL = "https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss";
 
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
@@ -109,6 +111,58 @@ public class QqMusicClient {
 
         return new Playlist(dissid, name, description, cover, owner,
                 "https://y.qq.com/n/ryqq/playlist/" + dissid, tracks);
+    }
+
+    public List<PlaylistRef> listMyPlaylists(QqCookie cookie, int limit) {
+        int capped = Math.max(1, Math.min(limit, 100));
+        String uri = UriComponentsBuilder.fromUriString(CREATED_DISS_URL)
+                .queryParam("loginUin", cookie.uin())
+                .queryParam("hostUin", "0")
+                .queryParam("format", "json")
+                .queryParam("inCharset", "utf8")
+                .queryParam("outCharset", "utf-8")
+                .queryParam("notice", "0")
+                .queryParam("platform", "yqq.json")
+                .queryParam("needNewCode", "0")
+                .queryParam("pic", "1")
+                .queryParam("sin", "0")
+                .queryParam("e", String.valueOf(capped - 1))
+                .build()
+                .encode()
+                .toUriString();
+
+        JsonNode root = getJson(uri, cookie);
+        if (root.path("code").asInt(0) != 0) {
+            throw businessError(root.path("code").asInt(0));
+        }
+        JsonNode dirs = root.path("data").path("vec_diss");
+        if (!dirs.isArray()) {
+            throw ProviderException.upstream("QQ 音乐未返回歌单列表，请改用粘贴歌单链接");
+        }
+        return parseCreatedDiss(dirs, capped);
+    }
+
+    static List<PlaylistRef> parseCreatedDiss(JsonNode dirs, int limit) {
+        List<PlaylistRef> refs = new ArrayList<>();
+        for (JsonNode dir : dirs) {
+            if (refs.size() >= limit) {
+                break;
+            }
+            String dissId = text(dir, "disstid");
+            if (dissId.isBlank()) {
+                continue;
+            }
+            String title = text(dir, "title");
+            if (title.isBlank()) {
+                title = "QQ 歌单 " + dissId;
+            }
+            String coverMid = text(dir.path("covermidts").path(0), "cover_mid");
+            String cover = coverMid.isBlank() ? ""
+                    : "https://y.gtimg.cn/music/photo_new/T002R300x300M000" + coverMid + ".jpg";
+            refs.add(new PlaylistRef(dissId, title, "https://y.qq.com/n/ryqq/playlist/" + dissId,
+                    cover, dir.path("song_count").asInt(0)));
+        }
+        return refs;
     }
 
     public String validate(QqCookie cookie) {

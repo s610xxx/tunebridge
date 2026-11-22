@@ -4,12 +4,14 @@ import com.tunebridge.config.TuneBridgeProperties;
 import com.tunebridge.domain.ConnectionMode;
 import com.tunebridge.domain.CreatedPlaylist;
 import com.tunebridge.domain.Playlist;
+import com.tunebridge.domain.PlaylistRef;
 import com.tunebridge.domain.ProviderConnection;
 import com.tunebridge.domain.ProviderId;
 import com.tunebridge.domain.Track;
 import com.tunebridge.provider.MusicProvider;
 import com.tunebridge.provider.ProviderException;
 import com.tunebridge.provider.demo.DemoCatalog;
+import com.tunebridge.provider.demo.DemoPlaylists;
 import com.tunebridge.provider.demo.DemoStore;
 import java.util.List;
 import java.util.Locale;
@@ -18,6 +20,8 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class AppleMusicProvider implements MusicProvider {
+
+    private static final int SOURCE_LIST_LIMIT = 50;
 
     private final AppleMusicClient client;
     private final DemoCatalog demoCatalog;
@@ -77,6 +81,18 @@ public class AppleMusicProvider implements MusicProvider {
         return client.fetchPlaylist(url,
                 connection.credential("musicUserToken"),
                 connection.credential("storefront"));
+    }
+
+    @Override
+    public List<PlaylistRef> listPlaylists(ProviderConnection connection) {
+        if (connection == null) {
+            throw ProviderException.notConnected("请先连接 Apple Music（来源平台）");
+        }
+        if (connection.mode() == ConnectionMode.DEMO) {
+            return DemoPlaylists.of(demoCatalog, demoStore, ProviderId.APPLE_MUSIC, sessionId(connection));
+        }
+        return client.listLibraryPlaylists(connection.credential("musicUserToken"),
+                connection.credential("storefront"), SOURCE_LIST_LIMIT);
     }
 
     @Override

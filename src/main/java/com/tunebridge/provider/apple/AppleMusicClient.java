@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.tunebridge.config.TuneBridgeProperties;
 import com.tunebridge.domain.CreatedPlaylist;
 import com.tunebridge.domain.Playlist;
+import com.tunebridge.domain.PlaylistRef;
 import com.tunebridge.domain.Track;
 import com.tunebridge.provider.ProviderException;
 import java.util.ArrayList;
@@ -88,6 +89,42 @@ public class AppleMusicClient {
                 ? "https://music.apple.com/" + region + "/library/playlist/" + ref.id()
                 : "https://music.apple.com/" + region + "/playlist/" + ref.id();
         return new Playlist(ref.id(), name, description, cover, owner, webUrl, tracks);
+    }
+
+    public List<PlaylistRef> listLibraryPlaylists(String userToken, String storefront, int limit) {
+        requireUserToken(userToken);
+        int capped = Math.max(1, Math.min(limit, 100));
+        JsonNode root = get("/v1/me/library/playlists", Map.of("limit", String.valueOf(capped)), userToken);
+        JsonNode data = root.path("data");
+        if (!data.isArray()) {
+            throw ProviderException.upstream("Apple Music 未返回资料库歌单，请改用粘贴歌单链接");
+        }
+        return parseLibraryPlaylists(data, normalizeStorefront(storefront), capped);
+    }
+
+    static List<PlaylistRef> parseLibraryPlaylists(JsonNode data, String storefront, int limit) {
+        List<PlaylistRef> refs = new ArrayList<>();
+        for (JsonNode item : data) {
+            if (refs.size() >= limit) {
+                break;
+            }
+            String id = item.path("id").asText("");
+            if (!id.startsWith("p.")) {
+                continue;
+            }
+            JsonNode attributes = item.path("attributes");
+            String name = attributes.path("name").asText("");
+            if (name.isBlank()) {
+                name = "Apple Music 歌单";
+            }
+            String url = attributes.path("url").asText("");
+            if (url.isBlank()) {
+                url = "https://music.apple.com/" + storefront + "/library/playlist/" + id;
+            }
+            // The library endpoint reports no track totals here, so 0 means "size unknown".
+            refs.add(new PlaylistRef(id, name, url, artworkUrl(attributes.path("artwork")), 0));
+        }
+        return refs;
     }
 
     public List<Track> search(String term, String storefront, int limit) {

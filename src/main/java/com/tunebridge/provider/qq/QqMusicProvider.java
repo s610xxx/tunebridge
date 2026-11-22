@@ -3,12 +3,14 @@ package com.tunebridge.provider.qq;
 import com.tunebridge.domain.ConnectionMode;
 import com.tunebridge.domain.CreatedPlaylist;
 import com.tunebridge.domain.Playlist;
+import com.tunebridge.domain.PlaylistRef;
 import com.tunebridge.domain.ProviderConnection;
 import com.tunebridge.domain.ProviderId;
 import com.tunebridge.domain.Track;
 import com.tunebridge.provider.MusicProvider;
 import com.tunebridge.provider.ProviderException;
 import com.tunebridge.provider.demo.DemoCatalog;
+import com.tunebridge.provider.demo.DemoPlaylists;
 import com.tunebridge.provider.demo.DemoStore;
 import java.util.List;
 import java.util.Map;
@@ -16,6 +18,8 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class QqMusicProvider implements MusicProvider {
+
+    private static final int SOURCE_LIST_LIMIT = 50;
 
     private final QqMusicClient client;
     private final DemoCatalog demoCatalog;
@@ -68,6 +72,17 @@ public class QqMusicProvider implements MusicProvider {
     }
 
     @Override
+    public List<PlaylistRef> listPlaylists(ProviderConnection connection) {
+        if (connection == null) {
+            throw ProviderException.notConnected("请先连接 QQ 音乐（来源平台）");
+        }
+        if (connection.mode() == ConnectionMode.DEMO) {
+            return demoPlaylists(connection);
+        }
+        return client.listMyPlaylists(QqCookie.parse(connection.credential("cookie")), SOURCE_LIST_LIMIT);
+    }
+
+    @Override
     public List<Track> searchTracks(ProviderConnection connection, String title, String artist, int limit) {
         if (connection != null && connection.mode() == ConnectionMode.DEMO) {
             return demoCatalog.targetCatalog(ProviderId.QQ_MUSIC);
@@ -99,6 +114,10 @@ public class QqMusicProvider implements MusicProvider {
         }
         QqCookie cookie = QqCookie.parse(connection.credential("cookie"));
         client.addTracks(cookie, playlist, tracks);
+    }
+
+    private List<PlaylistRef> demoPlaylists(ProviderConnection connection) {
+        return DemoPlaylists.of(demoCatalog, demoStore, ProviderId.QQ_MUSIC, sessionId(connection));
     }
 
     private Playlist fetchDemoPlaylist(ProviderConnection connection, String url) {

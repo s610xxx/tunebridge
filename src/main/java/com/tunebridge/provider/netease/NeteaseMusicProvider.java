@@ -3,6 +3,7 @@ package com.tunebridge.provider.netease;
 import com.tunebridge.domain.ConnectionMode;
 import com.tunebridge.domain.CreatedPlaylist;
 import com.tunebridge.domain.Playlist;
+import com.tunebridge.domain.PlaylistRef;
 import com.tunebridge.domain.ProviderConnection;
 import com.tunebridge.domain.ProviderId;
 import com.tunebridge.domain.Track;
@@ -56,6 +57,11 @@ public class NeteaseMusicProvider implements MusicProvider {
 
     @Override
     public Playlist fetchPlaylist(ProviderConnection connection, String url) {
+        throw ProviderException.badRequest("网易云音乐暂不支持作为来源平台");
+    }
+
+    @Override
+    public List<PlaylistRef> listPlaylists(ProviderConnection connection) {
         throw ProviderException.badRequest("网易云音乐暂不支持作为来源平台");
     }
 

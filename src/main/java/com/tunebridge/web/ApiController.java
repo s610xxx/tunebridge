@@ -5,6 +5,7 @@ import com.tunebridge.config.TuneBridgeProperties;
 import com.tunebridge.domain.ConnectionMode;
 import com.tunebridge.domain.MigrationJob;
 import com.tunebridge.domain.Playlist;
+import com.tunebridge.domain.PlaylistRef;
 import com.tunebridge.domain.ProviderConnection;
 import com.tunebridge.domain.ProviderId;
 import com.tunebridge.domain.Track;
@@ -129,6 +130,13 @@ public class ApiController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void disconnect(@PathVariable("provider") String providerValue, HttpSession session) {
         connectionService.disconnect(session, ProviderId.from(providerValue));
+    }
+
+    @GetMapping("/playlists")
+    public List<PlaylistRef> sourcePlaylists(@RequestParam("provider") String providerValue, HttpSession session) {
+        ProviderId providerId = ProviderId.from(providerValue);
+        MusicProvider provider = providerRegistry.get(providerId);
+        return provider.listPlaylists(connectionService.get(session, providerId));
     }
 
     @PostMapping("/playlists/preview")
