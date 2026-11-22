@@ -99,6 +99,7 @@ class MigrationJob {                       // 可变、synchronized，状态变�
     String id, sessionId, ownerId;         // ownerId = 音桥账号 ID
     ProviderId sourceProvider, targetProvider;
     String sourceUrl, requestedName;
+    String sourceLabel;                    // 非空表示本地备份来源（backup://local）
     ConnectionMode targetMode;
     ProviderConnection targetConnection;   // 终态后释放
     JobStatus status; int progress; String currentStep;
@@ -184,6 +185,7 @@ public interface MusicProvider {
 | DELETE | `/api/connections/{provider}` | 断开并清除凭据 |
 | POST | `/api/playlists/preview` | 解析并预览，body：`{provider, url}` |
 | POST | `/api/playlists/backup` | 只读备份（抓取曲目清单，不创建目标歌单） |
+| POST | `/api/backups/migrations` | 把浏览器里的备份曲目作为来源恢复迁移，body：`{targetProvider, playlistName?, sourceName?, tracks:[{title,artist,album,durationSec}]}` |
 | POST | `/api/migrations` | 创建匹配预览，body：`{sourceProvider, sourceUrl, targetProvider, playlistName?}` |
 | GET | `/api/migrations` | 本账号迁移历史分页（`offset` / `limit`，倒序，只读） |
 | GET | `/api/migrations/current` | 本会话活动任务，用于刷新页面后恢复 |
@@ -253,6 +255,15 @@ public interface MusicProvider {
 ```
 
 `GET /api/migrations?offset=0&limit=20` 返回 `{ "items": [JobView...], "offset": 0, "hasMore": true }`，按 `createdAt` 倒序，只包含当前登录账号的任务。
+
+### 6.4 备份恢复（本地来源）
+
+`POST /api/backups/migrations` 不走链接解析：前端把当前预览的曲目直接提交，服务端把每条清洗成 `Track`（去控制符、单字段 ≤300 字符、时长裁剪到 24 小时内），组装成 `Playlist("backup", 名称, "来自本地备份", …, "本地备份", "", tracks)` 交给同一个 `submitJob(...)`。
+
+- 任务记 `sourceUrl = "backup://local"`、`sourceLabel = "本地备份"`，`sourceProvider` 取目标平台（没有真实来源平台可指），因此**不要求来源平台已连接**，也不受「网易云只接受 QQ 来源」限制。
+- `JobView` 在 `sourceLabel != null` 时把 `source.provider` 输出为 `LOCAL_BACKUP`，历史与结果页据此显示「本地备份」并隐藏「再迁一次」。
+- 之后与链接迁移完全同一条链路：逐首在目标平台搜索 → `AWAITING_CONFIRMATION` → 勾选确认才创建与写入 → 每个状态变更落库，重启后同样只读。
+- 单次上限是两道：接口按 `max-tracks × 5` 拒绝明显过大的提交，实际匹配仍按 `max-tracks` 截断并写一条 WARN 日志；`/api/**` 写请求还有 64 KB 请求体上限，前端默认只提交前 `max-tracks` 首并提示超出部分不会提交。
 
 ## 7. 关键时序
 
@@ -638,7 +649,7 @@ tunebridge:
 
 ## 16. 测试计划
 
-共 **79 项 JUnit 测试 + 7 项 Node 测试**，`mvn test` 全绿。所有触达数据库的测试都固定 `spring.datasource.url=jdbc:h2:mem:<name>;DB_CLOSE_DELAY=-1`，不写本地 `./data/`。
+共 **83 项 JUnit 测试 + 7 项 Node 测试**，`mvn test` 全绿。所有触达数据库的测试都固定 `spring.datasource.url=jdbc:h2:mem:<name>;DB_CLOSE_DELAY=-1`，不写本地 `./data/`。
 
 ### 16.1 单元与适配器测试
 
@@ -655,7 +666,7 @@ tunebridge:
 - `DeploymentPolicyTest`：LOCAL 与 PUBLIC 的启动前置条件与请求边界（Host、Origin、Sec-Fetch-Site、回环地址、规范源、注册码长度）。
 - `MigrationHistoryTest`：按 owner 落库与隔离、报告字段完整、倒序分页不越权、非法分页先拒绝再落库、重启标记中断且不重复决策。
 - `MigrationHistoryApiTest`：历史只归本账号、他人 404、同账号其他会话只读、历史确认/放弃 409、会话结束后 INTERRUPTED、分页参数越界 400。
-- `DemoMigrationFlowTest`：注册登录 + CSRF 下的双向演示迁移、匹配与确认分离、未连接 409、非法链接 400、任务会话隔离。
+- `DemoMigrationFlowTest`：注册登录 + CSRF 下的双向演示迁移、匹配与确认分离、未连接 409、非法链接 400、任务会话隔离，以及备份读取（含 250 首大歌单）与「本地备份 → 已连接平台」的恢复闭环（`source.provider = LOCAL_BACKUP`、无需来源平台连接）。
 - `testsupport/BridgeRequests`：统一构造满足 LOCAL 边界的 MockMvc 请求（回环 `Host`、`X-Forwarded-*` 置空、CSRF 走请求头）。
 
 ### 16.3 前端与人工验收
@@ -676,6 +687,7 @@ tunebridge:
 7. 无后台管理面板：不能改密、找回密码或管理他人账号；PUBLIC 模式靠邀请码与限流收口。
 8. 匹配算法为规则型，后续可加入向量检索与用户反馈学习。
 9. 部署边界不接受反向代理（转发头一律拒绝），公网必须由应用自身终结 TLS。
+10. 备份恢复一次只处理 `max-tracks`（默认 200）首，超出的曲目需要分次提交；恢复出的新歌单与原备份不保证曲目顺序一一对应，因为写入的是目标平台匹配到的曲目。
 
 ## 18. 目录结构
 

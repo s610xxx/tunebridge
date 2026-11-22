@@ -168,7 +168,7 @@ mvn test
 node --test src/test/js/playlist-backup.test.js
 ```
 
-`mvn test` 覆盖 URL 解析、Cookie、匹配算法、演示链路、账号认证与部署边界、迁移历史与重启恢复，共 79 项；测试使用内存 H2，不会写入 `./data/`。前端格式测试需要 Node.js。
+`mvn test` 覆盖 URL 解析、Cookie、匹配算法、演示链路、备份读取与恢复、账号认证与部署边界、迁移历史与重启恢复，共 83 项；测试使用内存 H2，不会写入 `./data/`。前端格式测试需要 Node.js。
 
 ## 安全与合规
 
