@@ -187,7 +187,7 @@ public interface MusicProvider {
 | POST | `/api/playlists/backup` | 只读备份（抓取曲目清单，不创建目标歌单） |
 | POST | `/api/backups/migrations` | 把浏览器里的备份曲目作为来源恢复迁移，body：`{targetProvider, playlistName?, sourceName?, tracks:[{title,artist,album,durationSec}]}` |
 | POST | `/api/migrations` | 创建匹配预览，body：`{sourceProvider, sourceUrl, targetProvider, playlistName?}` |
-| GET | `/api/migrations` | 本账号迁移历史分页（`offset` / `limit`，倒序，只读） |
+| GET | `/api/migrations` | 本账号迁移历史分页（`offset` / `limit`，倒序，只读；可选 `source` / `target` / `status` / `from` / `to` 筛选，见 §6.5） |
 | GET | `/api/migrations/current` | 本会话活动任务，用于刷新页面后恢复 |
 | GET | `/api/migrations/{id}` | 活动任务快照；本账号已结束的任务回落到历史（`readOnly=true`） |
 | POST | `/api/migrations/{id}/confirm` | 勾选确认并写入，body：`{"selectedIndices":[0,2,5]}`（整数序号） |
@@ -254,7 +254,7 @@ public interface MusicProvider {
 }
 ```
 
-`GET /api/migrations?offset=0&limit=20` 返回 `{ "items": [JobView...], "offset": 0, "hasMore": true }`，按 `createdAt` 倒序，只包含当前登录账号的任务。
+`GET /api/migrations?offset=0&limit=20` 返回 `{ "items": [JobView...], "offset": 0, "hasMore": true }`，按 `createdAt` 倒序，只包含当前登录账号的任务；可选的 `source` / `target` / `status` / `from` / `to` 筛选见 §6.5。
 
 ### 6.4 备份恢复（本地来源）
 
@@ -264,6 +264,21 @@ public interface MusicProvider {
 - `JobView` 在 `sourceLabel != null` 时把 `source.provider` 输出为 `LOCAL_BACKUP`，历史与结果页据此显示「本地备份」并隐藏「再迁一次」。
 - 之后与链接迁移完全同一条链路：逐首在目标平台搜索 → `AWAITING_CONFIRMATION` → 勾选确认才创建与写入 → 每个状态变更落库，重启后同样只读。
 - 单次上限是两道：接口按 `max-tracks × 5` 拒绝明显过大的提交，实际匹配仍按 `max-tracks` 截断并写一条 WARN 日志；`/api/**` 写请求还有 64 KB 请求体上限，前端默认只提交前 `max-tracks` 首并提示超出部分不会提交。
+
+### 6.5 历史筛选与导出
+
+筛选在 SQL 层完成，`migration_history` 因此多了 `source_provider` 与 `target_provider` 两列（`save()` 直接取 `JobView.source().provider()` / `target().provider()`，本地备份来源落库为 `LOCAL_BACKUP`）：
+
+```
+GET /api/migrations?offset=0&limit=20&source=QQ_MUSIC&target=APPLE_MUSIC&status=COMPLETED&from=2026-11-01&to=2026-11-21
+```
+
+- 取值白名单来自枚举本身：`source` ∈ `ProviderId` + `LOCAL_BACKUP`，`target` ∈ `ProviderId`，`status` ∈ `JobStatus`；输入先 `trim` 再按 `Locale.ROOT` 大写，不在白名单内返回 400 `INVALID_INPUT`，SQL 只出现绑定参数，不拼接用户输入。
+- 时间是左闭右开：`from` 含当天，`to` 不含当天。`YYYY-MM-DD` 按 UTC 当天零点解析（`to` 取次日零点，因此「止于某天」包含整天），也接受带时区的完整 ISO 时间；前端日期控件提交的是本地日历日，边界差异只会影响跨时区当天数据，报告本身仍以 `createdAt` 为准。
+- `from >= to` 直接 400，分页边界（`offset ≤ 100000`、`1 ≤ limit ≤ 50`）与账号隔离规则不变。
+- 老库升级：`schema.sql` 用 `ALTER TABLE … ADD COLUMN IF NOT EXISTS` 补列，启动时 `recoverInterrupted()` 顺带把 `source_provider IS NULL` 的历史行按快照内容回填，回填后筛选与导出对旧数据同样有效。
+
+导出全部在前端完成，不新增写接口：`history-report.js` 提供 `summaryCsv(items, formatDate?)`（当前筛选的摘要，前端分页拉取 `limit=50`，最多 500 份）、`matchesCsv(job)`（单份报告的逐首明细）与 `reportJson(job)`（含 `matches` 与 `logs` 的完整快照）。CSV 一律加 UTF-8 BOM，单元格以 `=`、`+`、`-`、`@`、Tab 或换行开头时前置单引号，避免表格公式注入；摘要时间用页面同一套本地时区格式化函数，和列表显示一致。
 
 ## 7. 关键时序
 
@@ -649,7 +664,7 @@ tunebridge:
 
 ## 16. 测试计划
 
-共 **83 项 JUnit 测试 + 7 项 Node 测试**，`mvn test` 全绿。所有触达数据库的测试都固定 `spring.datasource.url=jdbc:h2:mem:<name>;DB_CLOSE_DELAY=-1`，不写本地 `./data/`。
+共 **89 项 JUnit 测试 + 15 项 Node 测试**，`mvn test` 全绿。所有触达数据库的测试都固定 `spring.datasource.url=jdbc:h2:mem:<name>;DB_CLOSE_DELAY=-1`，不写本地 `./data/`。
 
 ### 16.1 单元与适配器测试
 
@@ -664,16 +679,17 @@ tunebridge:
 
 - `AccountAuthFlowTest`：注册/登录/退出、CSRF 头必需、缺凭据 400、未登录 401、`/api/**` 需认证、转发头 403。
 - `DeploymentPolicyTest`：LOCAL 与 PUBLIC 的启动前置条件与请求边界（Host、Origin、Sec-Fetch-Site、回环地址、规范源、注册码长度）。
-- `MigrationHistoryTest`：按 owner 落库与隔离、报告字段完整、倒序分页不越权、非法分页先拒绝再落库、重启标记中断且不重复决策。
-- `MigrationHistoryApiTest`：历史只归本账号、他人 404、同账号其他会话只读、历史确认/放弃 409、会话结束后 INTERRUPTED、分页参数越界 400。
+- `MigrationHistoryTest`：按 owner 落库与隔离、报告字段完整、倒序分页不越权、非法分页先拒绝再落库、重启标记中断且不重复决策、按来源/目标/状态与时间窗口筛选（含空格与小写归一、非法值 400、`from >= to` 400）、升级后为历史行回填平台列。
+- `MigrationHistoryApiTest`：历史只归本账号、他人 404、同账号其他会话只读、历史确认/放弃 409、会话结束后 INTERRUPTED、分页参数越界 400、`GET /api/migrations` 带筛选跨账号不泄漏、筛选值无法映射到平台或状态时 400。
+- `StaticResourceAccessTest`：扫描 `index.html` 里引用的每个本地 `js`/`css` 资源，逐一以未登录请求断言 200，防止新增静态文件漏进 `SecurityConfiguration.STATIC_PATHS` 而被 `denyAll()` 拦成 403。
 - `DemoMigrationFlowTest`：注册登录 + CSRF 下的双向演示迁移、匹配与确认分离、未连接 409、非法链接 400、任务会话隔离，以及备份读取（含 250 首大歌单）与「本地备份 → 已连接平台」的恢复闭环（`source.provider = LOCAL_BACKUP`、无需来源平台连接）。
 - `testsupport/BridgeRequests`：统一构造满足 LOCAL 边界的 MockMvc 请求（回环 `Host`、`X-Forwarded-*` 置空、CSRF 走请求头）。
 
 ### 16.3 前端与人工验收
 
-- `node --test src/test/js/playlist-backup.test.js`：CSV/JSON 备份的解析、转义、公式前缀防护与坏数据拒绝。
+- `node --test src/test/js/playlist-backup.test.js src/test/js/history-report.test.js`：CSV/JSON 备份的解析、转义、公式前缀防护与坏数据拒绝；历史导出的摘要列顺序、逐首匹配表、报告 JSON 结构、本地时间注入与输入校验。
 - Chrome / Edge / Safari 桌面端 + 375px 移动端；核心流程 ≤ 5 步、无控制台错误。
-- 端到端手工验证：注册 → 连接演示账号 → 粘贴链接 → 匹配 → 勾选确认 → 报告 → 迁移历史；停服重启后历史仍在、未确认预览显示「任务已中断」、写入阶段中断显示「结果待核查」，第二个账号看到 0 条历史且无法读取他人任务。
+- 端到端手工验证：注册 → 连接演示账号 → 粘贴链接 → 匹配 → 勾选确认 → 报告 → 迁移历史；在历史弹窗里按平台/状态/时间筛选（含筛选后为空、重置）、导出摘要 CSV 与逐份报告的 CSV/JSON；停服重启后历史仍在、未确认预览显示「任务已中断」、写入阶段中断显示「结果待核查」，第二个账号看到 0 条历史且无法读取他人任务。
 - 真实 QQ 公开歌单读取（联网）与未配置 Apple 令牌时的降级提示。
 
 ## 17. 已知限制与后续演进
@@ -688,6 +704,7 @@ tunebridge:
 8. 匹配算法为规则型，后续可加入向量检索与用户反馈学习。
 9. 部署边界不接受反向代理（转发头一律拒绝），公网必须由应用自身终结 TLS。
 10. 备份恢复一次只处理 `max-tracks`（默认 200）首，超出的曲目需要分次提交；恢复出的新歌单与原备份不保证曲目顺序一一对应，因为写入的是目标平台匹配到的曲目。
+11. 历史导出在前端完成，一次最多 500 行（按 `limit ≤ 50` 分批拉取），超出部分需要先用时间窗口分段再导；筛选的纯日期边界按 UTC 自然日解释，跨时区用户在同一天边界上可能与本地日历有一天之差（导出的时间列本身用浏览器本地时区渲染）。
 
 ## 18. 目录结构
 
@@ -705,14 +722,14 @@ tunebridge/
 ├── src/main/resources/
 │   ├── application.yml
 │   ├── schema.sql     # app_users + migration_history
-│   └── static/        # index.html / app.js / playlist-backup.js / styles.css
+│   └── static/        # index.html / app.js / playlist-backup.js / history-report.js / styles.css
 ├── src/test/java/com/tunebridge/
 │   ├── testsupport/BridgeRequests.java   # 满足 LOCAL 边界的 MockMvc 请求构造
 │   ├── security/  # AccountAuthFlowTest、DeploymentPolicyTest、AuthRateLimiterTest
 │   ├── service/   # MigrationHistoryTest、TrackMatcherTest、ConnectionServiceTest
-│   ├── web/       # DemoMigrationFlowTest、MigrationHistoryApiTest
+│   ├── web/       # DemoMigrationFlowTest、MigrationHistoryApiTest、StaticResourceAccessTest
 │   └── provider/  # QQ / Apple / NetEase 解析与适配器测试
-├── src/test/js/playlist-backup.test.js
+├── src/test/js/playlist-backup.test.js, history-report.test.js
 ├── pom.xml
 └── README.md
 ```
