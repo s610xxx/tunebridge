@@ -184,6 +184,7 @@ public interface MusicProvider {
 | POST | `/api/connections/{provider}` | 建立连接，body：`{mode:"demo"}` 或 `{mode:"real", cookie? / musicUserToken? / pairingCode?}` |
 | DELETE | `/api/connections/{provider}` | 断开并清除凭据 |
 | POST | `/api/playlists/preview` | 解析并预览，body：`{provider, url}` |
+| GET | `/api/playlists?provider=QQ_MUSIC` | 列出当前连接账号 own 的来源歌单（`[{id,name,url,coverUrl,trackCount}]`，见 §6.6）；未连接 409 `NOT_CONNECTED`，网易云作为来源 400 `INVALID_INPUT` |
 | POST | `/api/playlists/backup` | 只读备份（抓取曲目清单，不创建目标歌单） |
 | POST | `/api/backups/migrations` | 把浏览器里的备份曲目作为来源恢复迁移，body：`{targetProvider, playlistName?, sourceName?, tracks:[{title,artist,album,durationSec}]}` |
 | POST | `/api/migrations` | 创建匹配预览，body：`{sourceProvider, sourceUrl, targetProvider, playlistName?}` |
@@ -279,6 +280,18 @@ GET /api/migrations?offset=0&limit=20&source=QQ_MUSIC&target=APPLE_MUSIC&status=
 - 老库升级：`schema.sql` 用 `ALTER TABLE … ADD COLUMN IF NOT EXISTS` 补列，启动时 `recoverInterrupted()` 顺带把 `source_provider IS NULL` 的历史行按快照内容回填，回填后筛选与导出对旧数据同样有效。
 
 导出全部在前端完成，不新增写接口：`history-report.js` 提供 `summaryCsv(items, formatDate?)`（当前筛选的摘要，前端分页拉取 `limit=50`，最多 500 份）、`matchesCsv(job)`（单份报告的逐首明细）与 `reportJson(job)`（含 `matches` 与 `logs` 的完整快照）。CSV 一律加 UTF-8 BOM，单元格以 `=`、`+`、`-`、`@`、Tab 或换行开头时前置单引号，避免表格公式注入；摘要时间用页面同一套本地时区格式化函数，和列表显示一致。
+
+### 6.6 批量迁移（前端排队，服务端零改动）
+
+服务端仍坚持「同一账号同时只有一个未结束任务」（`submitJob` 返回 409 `ACTIVE_JOB`），因此批量迁移**不新增任务模型**：队列完全在浏览器里，由 `playlist-batch.js` 这个纯函数 UMD 模块维护，`app.js` 每点一次「迁移下一份」才提交一份，复用 §7 的单任务生命周期（提交 → 轮询 → `AWAITING_CONFIRMATION` → 勾选确认 → 写入 → 落历史）。
+
+- 来源列表：`MusicProvider.listPlaylists(connection)` 新增 SPI，`GET /api/playlists?provider=` 直接调用。演示模式由 `DemoPlaylists.of(...)` 输出内置歌单 + 本会话演示库歌单；QQ 走 `fcg_user_created_diss`（`vec_diss[]`，取 `disstid / title / song_count / covermidts[0].cover_mid`，最多 50 份）；Apple 走 `/v1/me/library/playlists`（只保留 `p.` 开头的资料库歌单，该接口不返回曲目数，`trackCount = 0` 表示未知，`attributes.url` 缺失时按 storefront 拼资料库链接）；网易云只作目标，直接 400。返回 `PlaylistRef(id, name, url, coverUrl, trackCount)`，其中 `url` 就是可直接提交的来源链接。
+- 队列状态机：`PENDING → RUNNING → AWAITING_CONFIRMATION → COMPLETED / FAILED / INTERRUPTED / SKIPPED`。`markItem` 只允许改写未结束项，已有最终结果的行不会被迟到的轮询覆盖（`app.js` 用 `batchCurrentUrl` 关联当前任务，非队列任务的状态变化不动队列）。
+- 入队去重与上限：`parseLinks` 只接受 `http(s)://`、`demo://`、`backup://`，按行保序、拒绝超长（> 2000 字符）与非链接行并给出原因；`enqueue` 按 `url` 去重，单次最多 10 份，超出的计入 `overflow` 提示用户。
+- 跳过与重试：队列内点「暂不迁移」把该行标 `SKIPPED`，并调用 `POST /api/migrations/{id}/abandon` 释放服务端预览——否则未结束的占位任务会挡住下一份（409 `ACTIVE_JOB`）。`FAILED / INTERRUPTED / SKIPPED` 行可「重新排队」回到 `PENDING`；`COMPLETED` 行保留在队列里供批次小结导出，不能删除（报告本身在迁移历史永久保留）。
+- 方向锁定：队列非空时 `source / target` 固定，换方向会被拒绝并回退选择框，避免把 A 方向的链接提交到 B 方向。
+- 批次小结：`summaryCsv(batch, formatDate?)` 输出 10 列 CSV（含公式防护与 BOM），逐份明细仍走 §6.5 的历史导出，不重复造轮子。
+- 失败语义：批量不等于自动重试。提交失败（未连接、链接非法、已有活动任务）会把该行退回 `PENDING` 并把服务端原因写进说明，由用户决定重试、跳过还是清空；写入阶段失败或中断沿用「结果待核查」提示，绝不自动重放。
 
 ## 7. 关键时序
 
@@ -664,7 +677,7 @@ tunebridge:
 
 ## 16. 测试计划
 
-共 **89 项 JUnit 测试 + 15 项 Node 测试**，`mvn test` 全绿。所有触达数据库的测试都固定 `spring.datasource.url=jdbc:h2:mem:<name>;DB_CLOSE_DELAY=-1`，不写本地 `./data/`。
+共 **101 项 JUnit 测试 + 26 项 Node 测试**，`mvn test` 全绿。所有触达数据库的测试都固定 `spring.datasource.url=jdbc:h2:mem:<name>;DB_CLOSE_DELAY=-1`，不写本地 `./data/`。
 
 ### 16.1 单元与适配器测试
 
@@ -674,6 +687,9 @@ tunebridge:
 - `NeteaseLocalAccessTest` / `NeteaseMusicClientTest` / `NeteaseMusicProviderTest`：配对码校验与 grant 生命周期、CLI 参数与响应解析、只作目标平台。
 - `AuthRateLimiterTest`：注入时钟验证按来源窗口、全局限流与来源数量上限。
 - `ConnectionServiceTest`：退出即清除凭据。
+- `QqPlaylistListTest`：`fcg_user_created_diss` 响应解析（`vec_diss[]` 的 id / 标题 / 曲目数 / 封面、缺失字段兜底、跳过空 `disstid`）、业务码与结构异常时的降级提示、`limit` 边界。
+- `ApplePlaylistListTest`：只保留 `p.` 资料库歌单、`attributes.url` 缺失时按 storefront 拼链接、无曲目数落 0、空数据与超限截断。
+- `DemoPlaylistsTest`：内置歌单在前、本会话演示库歌单随后，`demo://library/<id>` 链接与曲目数可直接作为来源。
 
 ### 16.2 安全与持久化测试（MockMvc）
 
@@ -682,14 +698,15 @@ tunebridge:
 - `MigrationHistoryTest`：按 owner 落库与隔离、报告字段完整、倒序分页不越权、非法分页先拒绝再落库、重启标记中断且不重复决策、按来源/目标/状态与时间窗口筛选（含空格与小写归一、非法值 400、`from >= to` 400）、升级后为历史行回填平台列。
 - `MigrationHistoryApiTest`：历史只归本账号、他人 404、同账号其他会话只读、历史确认/放弃 409、会话结束后 INTERRUPTED、分页参数越界 400、`GET /api/migrations` 带筛选跨账号不泄漏、筛选值无法映射到平台或状态时 400。
 - `StaticResourceAccessTest`：扫描 `index.html` 里引用的每个本地 `js`/`css` 资源，逐一以未登录请求断言 200，防止新增静态文件漏进 `SecurityConfiguration.STATIC_PATHS` 而被 `denyAll()` 拦成 403。
+- `SourcePlaylistListApiTest`：`GET /api/playlists` 的演示列表（含会话内新建歌单）、未连接 409 `NOT_CONNECTED`、网易云与 Spotify 作为来源 400、缺参数 400、跨会话互不可见、未登录 401。
 - `DemoMigrationFlowTest`：注册登录 + CSRF 下的双向演示迁移、匹配与确认分离、未连接 409、非法链接 400、任务会话隔离，以及备份读取（含 250 首大歌单）与「本地备份 → 已连接平台」的恢复闭环（`source.provider = LOCAL_BACKUP`、无需来源平台连接）。
 - `testsupport/BridgeRequests`：统一构造满足 LOCAL 边界的 MockMvc 请求（回环 `Host`、`X-Forwarded-*` 置空、CSRF 走请求头）。
 
 ### 16.3 前端与人工验收
 
-- `node --test src/test/js/playlist-backup.test.js src/test/js/history-report.test.js`：CSV/JSON 备份的解析、转义、公式前缀防护与坏数据拒绝；历史导出的摘要列顺序、逐首匹配表、报告 JSON 结构、本地时间注入与输入校验。
+- `node --test src/test/js/playlist-backup.test.js src/test/js/history-report.test.js src/test/js/playlist-batch.test.js`：CSV/JSON 备份的解析、转义、公式前缀防护与坏数据拒绝；历史导出的摘要列顺序、逐首匹配表、报告 JSON 结构、本地时间注入与输入校验；批量队列的链接解析与拒绝原因、去重与 10 份上限、状态流转与「最终结果不可改写」、可移除 / 可重新排队的行、批次统计与小结 CSV。
 - Chrome / Edge / Safari 桌面端 + 375px 移动端；核心流程 ≤ 5 步、无控制台错误。
-- 端到端手工验证：注册 → 连接演示账号 → 粘贴链接 → 匹配 → 勾选确认 → 报告 → 迁移历史；在历史弹窗里按平台/状态/时间筛选（含筛选后为空、重置）、导出摘要 CSV 与逐份报告的 CSV/JSON；停服重启后历史仍在、未确认预览显示「任务已中断」、写入阶段中断显示「结果待核查」，第二个账号看到 0 条历史且无法读取他人任务。
+- 端到端手工验证：注册 → 连接演示账号 → 粘贴链接 → 匹配 → 勾选确认 → 报告 → 迁移历史；在历史弹窗里按平台/状态/时间筛选（含筛选后为空、重置）、导出摘要 CSV 与逐份报告的 CSV/JSON；批量迁移区读取来源歌单并勾选入队、粘贴多行链接（重复与非链接行被拒）、逐份「迁移下一份 → 确认」、跳过一份后服务端预览被释放且队列可继续、失败项重新排队、导出批次小结、队列非空时换方向被拒；停服重启后历史仍在、未确认预览显示「任务已中断」、写入阶段中断显示「结果待核查」，第二个账号看到 0 条历史且无法读取他人任务。
 - 真实 QQ 公开歌单读取（联网）与未配置 Apple 令牌时的降级提示。
 
 ## 17. 已知限制与后续演进
@@ -705,6 +722,8 @@ tunebridge:
 9. 部署边界不接受反向代理（转发头一律拒绝），公网必须由应用自身终结 TLS。
 10. 备份恢复一次只处理 `max-tracks`（默认 200）首，超出的曲目需要分次提交；恢复出的新歌单与原备份不保证曲目顺序一一对应，因为写入的是目标平台匹配到的曲目。
 11. 历史导出在前端完成，一次最多 500 行（按 `limit ≤ 50` 分批拉取），超出部分需要先用时间窗口分段再导；筛选的纯日期边界按 UTC 自然日解释，跨时区用户在同一天边界上可能与本地日历有一天之差（导出的时间列本身用浏览器本地时区渲染）。
+12. 批量队列只存在于当前浏览器页面：刷新、关闭标签页或退出登录都会清空队列（已生成的报告仍在迁移历史），换设备需要重新粘贴链接；单次上限 10 份，逐份确认因此无法压缩。跳过一份会调用 `abandon` 释放服务端预览，该份会以「任务已中断」进入历史，这是有意的留痕而不是脏数据。
+13. 来源歌单列表只覆盖「账号自己创建 / 资料库内」的歌单：QQ 取 `vec_diss`（上限 50，不含收藏的他人歌单），Apple 资料库接口不返回曲目数（列表显示「曲目数未知」）；平台不提供列表能力时前端退回「粘贴多条链接」。
 
 ## 18. 目录结构
 
@@ -713,23 +732,25 @@ tunebridge/
 ├── docs/PRD.md, TECH_DESIGN.md
 ├── src/main/java/com/tunebridge/
 │   ├── config/        # AppConfig（RestClient/线程池/会话销毁监听）、SecurityProperties、TuneBridgeProperties
-│   ├── domain/        # MigrationJob(+Snapshot)、Track/Playlist/TrackMatch、ProviderConnection、JobStatus
+│   ├── domain/        # MigrationJob(+Snapshot)、Track/Playlist/TrackMatch、PlaylistRef、ProviderConnection、JobStatus
 │   ├── security/      # SecurityConfiguration、DeploymentPolicy、Boundary/ApiBodyLimit/LoginGuard 过滤器、
 │   │                  # AuthRateLimiter、AccountService/AccountPrincipal/CurrentUser、SecurityResponses
-│   ├── provider/      # MusicProvider SPI + qq/ apple/ netease/ demo/ 与 ProviderRegistry、ProviderException
+│   ├── provider/      # MusicProvider SPI(+listPlaylists) + qq/ apple/ netease/ demo/（DemoPlaylists）
+│   │                  # 与 ProviderRegistry、ProviderException
 │   ├── service/       # ConnectionService、MigrationService、MigrationHistory、TrackMatcher
 │   └── web/           # ApiController、AuthController、ApiExceptionHandler、dto/JobView 等
 ├── src/main/resources/
 │   ├── application.yml
 │   ├── schema.sql     # app_users + migration_history
-│   └── static/        # index.html / app.js / playlist-backup.js / history-report.js / styles.css
+│   └── static/        # index.html / app.js / playlist-backup.js / playlist-batch.js / history-report.js / styles.css
 ├── src/test/java/com/tunebridge/
 │   ├── testsupport/BridgeRequests.java   # 满足 LOCAL 边界的 MockMvc 请求构造
 │   ├── security/  # AccountAuthFlowTest、DeploymentPolicyTest、AuthRateLimiterTest
 │   ├── service/   # MigrationHistoryTest、TrackMatcherTest、ConnectionServiceTest
-│   ├── web/       # DemoMigrationFlowTest、MigrationHistoryApiTest、StaticResourceAccessTest
-│   └── provider/  # QQ / Apple / NetEase 解析与适配器测试
-├── src/test/js/playlist-backup.test.js, history-report.test.js
+│   ├── web/       # DemoMigrationFlowTest、MigrationHistoryApiTest、SourcePlaylistListApiTest、StaticResourceAccessTest
+│   └── provider/  # QQ / Apple / NetEase 解析与适配器测试，含歌单列表（QqPlaylistListTest、ApplePlaylistListTest、
+│                  # DemoPlaylistsTest）
+├── src/test/js/playlist-backup.test.js, history-report.test.js, playlist-batch.test.js
 ├── pom.xml
 └── README.md
 ```
