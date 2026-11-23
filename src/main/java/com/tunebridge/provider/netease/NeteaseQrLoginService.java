@@ -91,8 +91,16 @@ public class NeteaseQrLoginService {
             case 802 -> new PollView("scanned", "已扫码，请在手机上确认", "");
             case 800 -> new PollView("expired", "二维码已过期，请重新获取", "");
             case 803 -> connected(entry, session, status.cookie());
+            case 8821 -> versionRequired(status.message());
             default -> unexpected(status);
         };
+    }
+
+    /** 8821 表示当前客户端版本不被接受，需要升级或切换登录方式。 */
+    private PollView versionRequired(String message) {
+        String detail = message.isBlank() ? "网易云要求升级客户端或切换登录方式" : message;
+        log.warn("NetEase QR login requires upgrade (code 8821): {}", detail);
+        return new PollView("failed", "网易云登录被拒（状态码 8821：" + detail + "），请尝试在手机上完成登录或使用 CLI 配对码", "");
     }
 
     /** 把 unikey 响应里的 Set-Cookie 拼成一条 Cookie 头。 */

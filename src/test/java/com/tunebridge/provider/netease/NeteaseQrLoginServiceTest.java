@@ -141,4 +141,30 @@ class NeteaseQrLoginServiceTest {
         assertThat(view.state()).isEqualTo("failed");
         assertThat(view.message()).contains("响应里没有登录状态码").doesNotContain("状态码 0");
     }
+
+    @Test
+    void handlesTheVersionRequiredError8821WithAHelpfulMessage() {
+        MockHttpSession session = new MockHttpSession();
+        String loginId = service.start(session).loginId();
+        when(client.pollQr(eq("unikey-1"), any())).thenReturn(new QrStatus(8821, "请切换其他登录方式或升级新版本再试", ""));
+
+        NeteaseQrLoginService.PollView view = service.poll(session, loginId);
+
+        assertThat(view.state()).isEqualTo("failed");
+        assertThat(view.message()).contains("8821").contains("请切换其他登录方式或升级新版本再试")
+                .contains("CLI 配对码");
+        verify(connections, never()).connect(any(), any(), anyString(), any());
+    }
+
+    @Test
+    void handles8821WithoutAMessageGracefully() {
+        MockHttpSession session = new MockHttpSession();
+        String loginId = service.start(session).loginId();
+        when(client.pollQr(eq("unikey-1"), any())).thenReturn(new QrStatus(8821, "", ""));
+
+        NeteaseQrLoginService.PollView view = service.poll(session, loginId);
+
+        assertThat(view.state()).isEqualTo("failed");
+        assertThat(view.message()).contains("网易云要求升级客户端或切换登录方式");
+    }
 }
