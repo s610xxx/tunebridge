@@ -42,6 +42,12 @@ public class NeteaseLocalAccess {
         if (!enabled()) {
             return;
         }
+        // 配对码仅用于 LOCAL 模式，PUBLIC 模式下忽略该配置
+        boolean isPublic = "PUBLIC".equalsIgnoreCase(System.getenv("TUNEBRIDGE_SECURITY_MODE"));
+        if (isPublic) {
+            // PUBLIC 模式下不启用配对码功能，避免与扫码登录混淆
+            return;
+        }
         if (!"127.0.0.1".equals(serverAddress)) {
             throw new IllegalStateException("网易云本机模式要求 server.address=127.0.0.1");
         }
@@ -54,6 +60,11 @@ public class NeteaseLocalAccess {
         if (!isAbsoluteFile(nodeExecutable) || !isAbsoluteFile(cliEntry)) {
             throw new IllegalStateException("网易云本机模式需要有效的 Node 和 CLI 文件绝对路径");
         }
+    }
+
+    /** PUBLIC 模式下配对码被忽略，只有 LOCAL 模式才启用。 */
+    public boolean cliEnabled() {
+        return enabled() && !"PUBLIC".equalsIgnoreCase(System.getenv("TUNEBRIDGE_SECURITY_MODE"));
     }
 
     public boolean enabled() {
