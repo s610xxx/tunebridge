@@ -30,7 +30,7 @@ public final class NeteaseEapi {
     public static Map<String, Object> params() {
         Map<String, Object> params = new LinkedHashMap<>();
         params.put("os", "pc");
-        params.put("appver", "9.0.0");
+        params.put("appver", "9.1.12");
         params.put("versioncode", "140");
         params.put("mobilename", "chrome");
         params.put("buildver", String.valueOf(System.currentTimeMillis() / 1000L));
