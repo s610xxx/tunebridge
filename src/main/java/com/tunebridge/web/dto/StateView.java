@@ -17,7 +17,8 @@ public record StateView(
             String defaultStorefront,
             int maxTracks,
             String appleDeveloperToken,
-            boolean neteaseRealReady
+            boolean neteaseRealReady,
+            String authMode
     ) {
     }
 }

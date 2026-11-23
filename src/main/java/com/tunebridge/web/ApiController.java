@@ -1,6 +1,7 @@
 package com.tunebridge.web;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.tunebridge.config.SecurityProperties;
 import com.tunebridge.config.TuneBridgeProperties;
 import com.tunebridge.domain.ConnectionMode;
 import com.tunebridge.domain.MigrationJob;
@@ -53,19 +54,22 @@ public class ApiController {
     private final MigrationService migrationService;
     private final DemoStore demoStore;
     private final TuneBridgeProperties properties;
+    private final SecurityProperties securityProperties;
     private final AppleDeveloperTokenService appleTokenService;
     private final NeteaseLocalAccess neteaseLocalAccess;
     private final NeteaseQrLoginService neteaseQrLogin;
 
     public ApiController(ProviderRegistry providerRegistry, ConnectionService connectionService,
                          MigrationService migrationService, DemoStore demoStore,
-                         TuneBridgeProperties properties, AppleDeveloperTokenService appleTokenService,
+                         TuneBridgeProperties properties, SecurityProperties securityProperties,
+                         AppleDeveloperTokenService appleTokenService,
                          NeteaseLocalAccess neteaseLocalAccess, NeteaseQrLoginService neteaseQrLogin) {
         this.providerRegistry = providerRegistry;
         this.connectionService = connectionService;
         this.migrationService = migrationService;
         this.demoStore = demoStore;
         this.properties = properties;
+        this.securityProperties = securityProperties;
         this.appleTokenService = appleTokenService;
         this.neteaseLocalAccess = neteaseLocalAccess;
         this.neteaseQrLogin = neteaseQrLogin;
@@ -96,13 +100,15 @@ public class ApiController {
                 log.warn("Apple developer token is configured but unavailable: {}", ex.code());
             }
         }
+        String authMode = securityProperties.getMode().name().toLowerCase();
         return new StateView.ConfigView(
                 appleReady,
                 properties.getDemo().isEnabled(),
                 properties.getApple().getDefaultStorefront(),
                 properties.getMigration().getMaxTracks(),
                 developerToken,
-                neteaseLocalAccess.enabled()
+                neteaseLocalAccess.enabled(),
+                authMode
         );
     }
 

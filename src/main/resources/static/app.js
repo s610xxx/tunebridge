@@ -1073,7 +1073,7 @@
         connectProvider = provider;
         clearSensitiveInputs();
         els.connectTitle.textContent = `连接 ${providerLabel(provider)}`;
-        const neteaseLocalCli = auth.mode === 'local';
+        const neteaseLocalCli = state.config.authMode === 'local';
         els.connectSubtitle.textContent = provider === 'QQ_MUSIC'
                 ? '公开歌单可直接读取；连接后可创建并写入歌单'
                 : provider === 'APPLE_MUSIC'
@@ -1163,7 +1163,7 @@
     async function connectRealNetease() {
         if (!requireLogin()) return;
         const generation = authGeneration;
-        if (auth.mode !== 'local' || state.config.neteaseRealReady !== true) {
+        if (state.config.authMode !== 'local' || state.config.neteaseRealReady !== true) {
             clearSensitiveInputs();
             toast('服务器尚未启用本机 CLI，无法连接真实网易云', 'error');
             return;
@@ -1188,7 +1188,7 @@
             toast('网易云连接失败，请检查配对码及服务器本机 CLI 状态', 'error', 7000);
         } finally {
             setButtonBusy(els.connectNeteaseReal, false);
-            els.connectNeteaseReal.disabled = auth.mode !== 'local' || state.config.neteaseRealReady !== true;
+            els.connectNeteaseReal.disabled = state.config.authMode !== 'local' || state.config.neteaseRealReady !== true;
         }
     }
 
