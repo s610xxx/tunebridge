@@ -29,24 +29,24 @@ public class NeteaseWebClient {
         this.objectMapper = objectMapper;
     }
 
-    public String requestQrKey() {
+    public QrKeyResult requestQrKey() {
         Map<String, Object> params = NeteaseEapi.params();
         params.put("code", "100");
         params.put("type", 3);
-        JsonNode body = post("/api/login/qrcode/unikey", params, null).json();
-        String unikey = text(body, "unikey");
+        Reply reply = post("/api/login/qrcode/unikey", params, null);
+        String unikey = text(reply.json(), "unikey");
         if (unikey.isBlank()) {
             throw ProviderException.upstream("网易云未返回登录二维码密钥");
         }
-        return unikey;
+        return new QrKeyResult(unikey, reply.setCookies());
     }
 
-    public QrStatus pollQr(String unikey) {
+    public QrStatus pollQr(String unikey, String cookieHeader) {
         Map<String, Object> params = NeteaseEapi.params();
         params.put("code", "100");
         params.put("key", unikey);
         params.put("type", 3);
-        Reply reply = rawPost("/api/login/qrcode/client/login", params, null);
+        Reply reply = rawPost("/api/login/qrcode/client/login", params, cookieHeader);
         int code = reply.json().path("code").asInt(0);
         return new QrStatus(code, text(reply.json(), "message"), code == 803 ? loginCookie(reply) : "");
     }
@@ -249,5 +249,8 @@ public class NeteaseWebClient {
     }
 
     public record QrStatus(int code, String message, String cookie) {
+    }
+
+    public record QrKeyResult(String unikey, List<String> setCookies) {
     }
 }

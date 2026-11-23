@@ -18,7 +18,9 @@ class NeteaseWebClientTest {
     void sendsTheQrKeyRequestToTheEapiChannelWithEncryptedParams() {
         recorder.reply = new NeteaseTransport.Response(200, "{\"unikey\":\"uk-1\",\"code\":200}", List.of());
 
-        assertThat(client.requestQrKey()).isEqualTo("uk-1");
+        NeteaseWebClient.QrKeyResult result = client.requestQrKey();
+
+        assertThat(result.unikey()).isEqualTo("uk-1");
         assertThat(recorder.url).isEqualTo("https://music.163.com/eapi/login/qrcode/unikey");
         assertThat(recorder.body).matches("params=[0-9A-F]+");
         assertThat(recorder.cookie).isNull();
@@ -40,7 +42,7 @@ class NeteaseWebClientTest {
                 "NMTID=abc; Path=/; HttpOnly",
                 "server_netsp=1; Path=/"));
 
-        QrStatus status = client.pollQr("uk-1");
+        QrStatus status = client.pollQr("uk-1", null);
 
         assertThat(status.code()).isEqualTo(803);
         assertThat(status.cookie()).isEqualTo("MUSIC_U=token; NMTID=abc");
@@ -64,6 +66,16 @@ class NeteaseWebClientTest {
         assertThatThrownBy(() -> client.requestQrKey())
                 .isInstanceOf(ProviderException.class)
                 .hasMessageContaining("稍后重试");
+    }
+
+    @Test
+    void sendsCookiesToThePollEndpointWhenProvided() {
+        recorder.reply = new NeteaseTransport.Response(200, "{\"code\":801,\"message\":\"等待扫码\"}", List.of());
+
+        QrStatus status = client.pollQr("uk-1", "MUSIC_U=token; NMTID=abc");
+
+        assertThat(status.code()).isEqualTo(801);
+        assertThat(recorder.cookie).isEqualTo("MUSIC_U=token; NMTID=abc");
     }
 
     @Test

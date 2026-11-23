@@ -2,11 +2,13 @@ package com.tunebridge.provider.netease;
 
 import com.tunebridge.domain.ProviderId;
 import com.tunebridge.provider.ProviderException;
+import com.tunebridge.provider.netease.NeteaseWebClient.QrKeyResult;
 import com.tunebridge.provider.netease.NeteaseWebClient.QrStatus;
 import com.tunebridge.service.ConnectionService;
 import jakarta.servlet.http.HttpSession;
 import java.security.SecureRandom;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
@@ -46,12 +48,13 @@ public class NeteaseQrLoginService {
         if (pendings.size() >= MAX_PENDING) {
             throw ProviderException.badRequest("登录请求过多，请稍后再试");
         }
-        String unikey = client.requestQrKey();
+        QrKeyResult result = client.requestQrKey();
+        String unikey = result.unikey();
         String target = QR_TARGET + unikey;
         byte[] bytes = new byte[16];
         random.nextBytes(bytes);
         Pending entry = new Pending(HexFormat.of().formatHex(bytes), session.getId(), unikey,
-                QrCodeSvg.render(target), System.currentTimeMillis() + TTL_MILLIS);
+                QrCodeSvg.render(target), System.currentTimeMillis() + TTL_MILLIS, result.setCookies());
         pendings.put(entry.loginId, entry);
         return new StartView(entry.loginId, entry.svg, target, TTL_MILLIS / 1000L);
     }
@@ -81,7 +84,8 @@ public class NeteaseQrLoginService {
     }
 
     private PollView check(Pending entry, HttpSession session) {
-        QrStatus status = client.pollQr(entry.unikey);
+        String cookieHeader = buildCookieHeader(entry.cookies);
+        QrStatus status = client.pollQr(entry.unikey, cookieHeader);
         return switch (status.code()) {
             case 801 -> new PollView("waiting", "等待扫码", "");
             case 802 -> new PollView("scanned", "已扫码，请在手机上确认", "");
@@ -89,6 +93,25 @@ public class NeteaseQrLoginService {
             case 803 -> connected(entry, session, status.cookie());
             default -> unexpected(status);
         };
+    }
+
+    /** 把 unikey 响应里的 Set-Cookie 拼成一条 Cookie 头。 */
+    private static String buildCookieHeader(List<String> setCookies) {
+        if (setCookies == null || setCookies.isEmpty()) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String header : setCookies) {
+            String pair = header.split(";", 2)[0].trim();
+            if (!pair.contains("=")) {
+                continue;
+            }
+            if (!sb.isEmpty()) {
+                sb.append("; ");
+            }
+            sb.append(pair);
+        }
+        return sb.isEmpty() ? null : sb.toString();
     }
 
     /** 上游给出预期外的状态时，把状态码和原文一起回报，否则用户和服务端都只能看到一句无信息量的「异常」。 */
@@ -127,15 +150,17 @@ public class NeteaseQrLoginService {
         private final String unikey;
         private final String svg;
         private final long expiresAt;
+        private final List<String> cookies;
         private long lastPollAt;
         private PollView lastView;
 
-        private Pending(String loginId, String sessionId, String unikey, String svg, long expiresAt) {
+        private Pending(String loginId, String sessionId, String unikey, String svg, long expiresAt, List<String> cookies) {
             this.loginId = loginId;
             this.sessionId = sessionId;
             this.unikey = unikey;
             this.svg = svg;
             this.expiresAt = expiresAt;
+            this.cookies = cookies;
         }
     }
 

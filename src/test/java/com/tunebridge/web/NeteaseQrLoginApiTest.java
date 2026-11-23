@@ -2,6 +2,7 @@ package com.tunebridge.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -20,6 +21,7 @@ import com.tunebridge.provider.netease.NeteaseWebClient.QrStatus;
 import com.tunebridge.service.ConnectionService;
 import com.tunebridge.testsupport.BridgeRequests;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -43,7 +45,7 @@ class NeteaseQrLoginApiTest {
 
     @BeforeEach
     void handOutAKey() {
-        when(client.requestQrKey()).thenReturn("unikey-1");
+        when(client.requestQrKey()).thenReturn(new NeteaseWebClient.QrKeyResult("unikey-1", List.of()));
     }
 
     @Test
@@ -64,7 +66,7 @@ class NeteaseQrLoginApiTest {
     void surfacesTheScanProgressReportedByThePlatform() throws Exception {
         MockHttpSession session = new MockHttpSession();
         String loginId = start(session);
-        when(client.pollQr("unikey-1")).thenReturn(new QrStatus(802, "已扫码，请在手机上确认", ""));
+        when(client.pollQr(eq("unikey-1"), any())).thenReturn(new QrStatus(802, "已扫码，请在手机上确认", ""));
 
         JsonNode scanned = read(mvc.perform(BridgeRequests.get("/api/connections/netease/qr/" + loginId)
                 .session(session)).andExpect(status().isOk()).andReturn());
@@ -81,7 +83,7 @@ class NeteaseQrLoginApiTest {
         when(connections.connect(eq(session), eq(ProviderId.NETEASE_MUSIC), eq("real"), any()))
                 .thenReturn(new ProviderConnection(ProviderId.NETEASE_MUSIC, ConnectionMode.REAL,
                         "网易云音乐 · 小明", Map.of("neteaseCookie", COOKIE)));
-        when(client.pollQr("unikey-1")).thenReturn(new QrStatus(803, "登录成功", COOKIE));
+        when(client.pollQr(eq("unikey-1"), any())).thenReturn(new QrStatus(803, "登录成功", COOKIE));
 
         MvcResult result = mvc.perform(BridgeRequests.get("/api/connections/netease/qr/" + loginId)
                 .session(session)).andExpect(status().isOk()).andReturn();

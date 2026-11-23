@@ -17,6 +17,7 @@ import com.tunebridge.domain.ProviderId;
 import com.tunebridge.provider.ProviderException;
 import com.tunebridge.provider.netease.NeteaseWebClient.QrStatus;
 import com.tunebridge.service.ConnectionService;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,7 +33,8 @@ class NeteaseQrLoginServiceTest {
 
     @BeforeEach
     void handOutAKey() {
-        when(client.requestQrKey()).thenReturn("unikey-1");
+        when(client.requestQrKey()).thenReturn(new NeteaseWebClient.QrKeyResult("unikey-1", List.of()));
+        when(client.pollQr(eq("unikey-1"), any())).thenReturn(new QrStatus(801, "等待扫码", ""));
     }
 
     @Test
@@ -55,14 +57,14 @@ class NeteaseQrLoginServiceTest {
         assertThatThrownBy(() -> service.poll(stranger, loginId))
                 .isInstanceOf(ProviderException.class)
                 .hasMessageContaining("已失效");
-        verify(client, never()).pollQr(anyString());
+        verify(client, never()).pollQr(anyString(), any());
     }
 
     @Test
     void connectsTheAccountOnceThePhoneConfirmsAndRetiresTheLogin() {
         MockHttpSession session = new MockHttpSession();
         String loginId = service.start(session).loginId();
-        when(client.pollQr("unikey-1")).thenReturn(new QrStatus(803, "登录成功", COOKIE));
+        when(client.pollQr(eq("unikey-1"), any())).thenReturn(new QrStatus(803, "登录成功", COOKIE));
         when(connections.connect(eq(session), eq(ProviderId.NETEASE_MUSIC), eq("real"), any()))
                 .thenReturn(new ProviderConnection(ProviderId.NETEASE_MUSIC, ConnectionMode.REAL,
                         "网易云音乐 · 小明", Map.of("neteaseCookie", COOKIE)));
@@ -79,7 +81,7 @@ class NeteaseQrLoginServiceTest {
     void reportsAnExpiredCodeOnlyOnceAndThenRetiresTheLogin() {
         MockHttpSession session = new MockHttpSession();
         String loginId = service.start(session).loginId();
-        when(client.pollQr("unikey-1")).thenReturn(new QrStatus(800, "二维码已过期", ""));
+        when(client.pollQr(eq("unikey-1"), any())).thenReturn(new QrStatus(800, "二维码已过期", ""));
 
         NeteaseQrLoginService.PollView view = service.poll(session, loginId);
 
@@ -92,21 +94,21 @@ class NeteaseQrLoginServiceTest {
     void throttlesPollingSoOneScanCannotFloodUpstream() {
         MockHttpSession session = new MockHttpSession();
         String loginId = service.start(session).loginId();
-        when(client.pollQr("unikey-1")).thenReturn(new QrStatus(801, "等待扫码", ""));
+        when(client.pollQr(eq("unikey-1"), any())).thenReturn(new QrStatus(801, "等待扫码", ""));
 
         NeteaseQrLoginService.PollView first = service.poll(session, loginId);
         NeteaseQrLoginService.PollView second = service.poll(session, loginId);
 
         assertThat(first.state()).isEqualTo("waiting");
         assertThat(second).isSameAs(first);
-        verify(client, times(1)).pollQr("unikey-1");
+        verify(client, times(1)).pollQr(anyString(), any());
     }
 
     @Test
     void keepsAScannedCodePendingUntilTheUserConfirmsOnThePhone() {
         MockHttpSession session = new MockHttpSession();
         String loginId = service.start(session).loginId();
-        when(client.pollQr("unikey-1")).thenReturn(new QrStatus(802, "已扫码", ""));
+        when(client.pollQr(eq("unikey-1"), any())).thenReturn(new QrStatus(802, "已扫码", ""));
 
         NeteaseQrLoginService.PollView view = service.poll(session, loginId);
 
@@ -119,7 +121,7 @@ class NeteaseQrLoginServiceTest {
     void reportsTheUpstreamCodeWhenTheLoginStateIsUnexpected() {
         MockHttpSession session = new MockHttpSession();
         String loginId = service.start(session).loginId();
-        when(client.pollQr("unikey-1")).thenReturn(new QrStatus(502, "该账号存在风险，请稍后再试", ""));
+        when(client.pollQr(eq("unikey-1"), any())).thenReturn(new QrStatus(502, "该账号存在风险，请稍后再试", ""));
 
         NeteaseQrLoginService.PollView view = service.poll(session, loginId);
 
@@ -132,7 +134,7 @@ class NeteaseQrLoginServiceTest {
     void reportsAMissingLoginCodeWithoutAnEmptyStatusCode() {
         MockHttpSession session = new MockHttpSession();
         String loginId = service.start(session).loginId();
-        when(client.pollQr("unikey-1")).thenReturn(new QrStatus(0, "", ""));
+        when(client.pollQr(eq("unikey-1"), any())).thenReturn(new QrStatus(0, "", ""));
 
         NeteaseQrLoginService.PollView view = service.poll(session, loginId);
 
