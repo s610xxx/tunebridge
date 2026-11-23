@@ -149,11 +149,15 @@ REG_CODE=$(prev TUNEBRIDGE_REGISTRATION_CODE)
 REG_CODE=${REG_CODE:-$(openssl rand -base64 64 | tr -dc 'A-Za-z0-9' | cut -c1-40)}
 [ "${#REG_CODE}" -ge 32 ] && [ "${#REG_CODE}" -le 128 ] || die "邀请码长度不合规"
 
-if [ ! -f "$ETC_DIR/keystore.p12" ]; then
+if [ ! -s "$ETC_DIR/keystore.p12" ]; then
     log "生成自签证书（SAN=$KS_HOST，397 天）"
-    "$JAVA_HOME/bin/keytool" -genkeypair -alias tunebridge -keyalg RSA -keysize 2048 -validity 397 \
+    # 半路失败留下的 0 字节 keystore 会让后续每次重跑都跳过生成，且只在 TLS 握手时才炸
+    if ! KS_ERR=$("$JAVA_HOME/bin/keytool" -genkeypair -alias tunebridge -keyalg RSA -keysize 2048 -validity 397 \
         -dname "CN=$KS_HOST" -ext "SAN=dns:$KS_HOST,ip:$KS_HOST" \
-        -keystore "$ETC_DIR/keystore.p12" -storetype PKCS12 -storepass "$KS_PASS" >/dev/null 2>&1
+        -keystore "$ETC_DIR/keystore.p12" -storetype PKCS12 -storepass "$KS_PASS" 2>&1); then
+        printf '%s\n' "$KS_ERR" >&2
+        die "keytool 生成证书失败"
+    fi
 fi
 chown "root:$RUN_USER" "$ETC_DIR/keystore.p12"
 chmod 640 "$ETC_DIR/keystore.p12"
@@ -176,6 +180,7 @@ ENV
 chmod 600 "$ETC_DIR/tunebridge.env"
 umask 022
 
+# systemd 的 ${VAR} 不拆词：整串 JAVA_OPTS 会被当成一个 java 参数，所以 ExecStart 里用不带花括号的 $VAR
 cat > /etc/systemd/system/tunebridge.service <<UNIT
 [Unit]
 Description=TuneBridge 音桥
@@ -189,7 +194,7 @@ Group=tunebridge
 WorkingDirectory=/opt/tunebridge
 EnvironmentFile=/etc/tunebridge/tunebridge.env
 Environment="JAVA_OPTS=-Xms128m -Xmx640m"
-ExecStart=$RUNTIME_JAVA/bin/java \${JAVA_OPTS} -jar $APP_DIR/tunebridge.jar
+ExecStart=$RUNTIME_JAVA/bin/java \$JAVA_OPTS -jar $APP_DIR/tunebridge.jar
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20
