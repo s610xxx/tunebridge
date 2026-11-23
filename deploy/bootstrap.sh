@@ -58,17 +58,33 @@ install_pkgs() {
     fi
 }
 
-java_major() {
-    java -XshowSettings:properties -version 2>&1 \
-        | sed -n 's/.*java\.version = \([0-9]*\).*/\1/p' | head -1
+find_java_home() {
+    local dir major want_javac=$1
+    for dir in $(ls -d /usr/lib/jvm/*/ 2>/dev/null | sort -r); do
+        dir=${dir%/}
+        [ -x "$dir/bin/java" ] || continue
+        if [ "$want_javac" = yes ] && [ ! -x "$dir/bin/javac" ]; then continue; fi
+        major=$("$dir/bin/java" -XshowSettings:properties -version 2>&1 \
+            | sed -n 's/.*java\.version = \([0-9]*\).*/\1/p' | head -1)
+        if [ "${major:-0}" -ge 21 ]; then echo "$dir"; return 0; fi
+    done
+    return 1
 }
 
-JV=$(java_major || echo 0)
-if [ "${JV:-0}" -lt 21 ]; then
-    log "安装 JDK 21（当前 major=${JV:-none}）"
+# 发行版的 maven/git 依赖可能把 /usr/bin/java 指到 JDK 8，必须显式锁定 21+ 的安装目录
+JAVA_HOME=$(find_java_home yes) || {
+    log "安装 JDK 21（/usr/lib/jvm 下没有 21+ 带 javac 的目录）"
     if [ "$PM" = apt ]; then install_pkgs openjdk-21-jdk-headless; else install_pkgs java-21-openjdk-devel; fi
-fi
-command -v keytool >/dev/null || die "缺少 keytool，请安装 JDK 而非仅 JRE"
+    JAVA_HOME=$(find_java_home yes) || JAVA_HOME=$(find_java_home no) \
+        || die "未找到 Java 21，请手工安装 JDK"
+}
+export JAVA_HOME
+PATH="$JAVA_HOME/bin:$PATH"
+export PATH
+RUNTIME_JAVA=$(find_java_home no) || RUNTIME_JAVA=$JAVA_HOME
+log "Java 运行时: $RUNTIME_JAVA"
+log "Java 编译端: $JAVA_HOME"
+[ -x "$JAVA_HOME/bin/keytool" ] || die "$JAVA_HOME 中没有 keytool，请安装 JDK 而非仅 JRE"
 
 if [ -z "$JAR" ]; then
     command -v git >/dev/null || install_pkgs git
@@ -94,7 +110,15 @@ MVN
         git clone --depth 1 -b "$GIT_REF" "$GIT_URL" "$SRC"
     fi
     log "构建 jar（跳过测试）"
-    (cd "$SRC" && mvn -q -B -DskipTests package)
+    # 发行版的 /usr/bin/mvn 会用 alternatives 里的 javac 反推 JAVA_HOME，绕过它才能用 21 编译
+    MVN_BIN=$(command -v mvn)
+    if [ -x /usr/share/maven/bin/mvn ]; then MVN_BIN=/usr/share/maven/bin/mvn; fi
+    MVN_INFO=$("$MVN_BIN" -version 2>&1 || true)
+    MVN_JAVA=$(printf '%s\n' "$MVN_INFO" | sed -n 's/^Java version: \([0-9]*\).*/\1/p' | head -1)
+    [ "${MVN_JAVA:-0}" -ge 21 ] \
+        || die "Maven 仍运行在 Java ${MVN_JAVA:-未知} 上（JAVA_HOME=$JAVA_HOME）；请改用 --jar 上传本机已构建产物"
+    log "Maven 使用 Java $MVN_JAVA"
+    (cd "$SRC" && "$MVN_BIN" -q -B -DskipTests package)
     JAR=$(ls "$SRC"/target/*.jar | head -1)
     [ -f "$JAR" ] || die "构建未产出 jar"
 fi
@@ -127,7 +151,7 @@ REG_CODE=${REG_CODE:-$(openssl rand -base64 64 | tr -dc 'A-Za-z0-9' | cut -c1-40
 
 if [ ! -f "$ETC_DIR/keystore.p12" ]; then
     log "生成自签证书（SAN=$KS_HOST，397 天）"
-    keytool -genkeypair -alias tunebridge -keyalg RSA -keysize 2048 -validity 397 \
+    "$JAVA_HOME/bin/keytool" -genkeypair -alias tunebridge -keyalg RSA -keysize 2048 -validity 397 \
         -dname "CN=$KS_HOST" -ext "SAN=dns:$KS_HOST,ip:$KS_HOST" \
         -keystore "$ETC_DIR/keystore.p12" -storetype PKCS12 -storepass "$KS_PASS" >/dev/null 2>&1
 fi
@@ -152,7 +176,7 @@ ENV
 chmod 600 "$ETC_DIR/tunebridge.env"
 umask 022
 
-cat > /etc/systemd/system/tunebridge.service <<'UNIT'
+cat > /etc/systemd/system/tunebridge.service <<UNIT
 [Unit]
 Description=TuneBridge 音桥
 After=network-online.target
@@ -165,7 +189,7 @@ Group=tunebridge
 WorkingDirectory=/opt/tunebridge
 EnvironmentFile=/etc/tunebridge/tunebridge.env
 Environment="JAVA_OPTS=-Xms128m -Xmx640m"
-ExecStart=/usr/bin/java ${JAVA_OPTS} -jar /opt/tunebridge/tunebridge.jar
+ExecStart=$RUNTIME_JAVA/bin/java \${JAVA_OPTS} -jar $APP_DIR/tunebridge.jar
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20
@@ -184,11 +208,13 @@ WantedBy=multi-user.target
 UNIT
 
 if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-    firewall-cmd --permanent --add-port="$PORT/tcp" >/dev/null && firewall-cmd --reload >/dev/null \
-        && log "firewalld 已放行 $PORT/tcp"
+    if firewall-cmd --permanent --add-port="$PORT/tcp" >/dev/null 2>&1; then
+        firewall-cmd --reload >/dev/null 2>&1 || true
+        log "firewalld 已放行 $PORT/tcp"
+    fi
 fi
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
-    ufw allow "$PORT/tcp" >/dev/null && log "ufw 已放行 $PORT/tcp"
+    if ufw allow "$PORT/tcp" >/dev/null 2>&1; then log "ufw 已放行 $PORT/tcp"; fi
 fi
 
 systemctl daemon-reload
