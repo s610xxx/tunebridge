@@ -37,9 +37,10 @@ class NeteaseQrLoginApiTest {
     private final NeteaseWebClient client = mock(NeteaseWebClient.class);
     private final ConnectionService connections = mock(ConnectionService.class);
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final com.tunebridge.config.SecurityProperties securityProps = new com.tunebridge.config.SecurityProperties();
     private final MockMvc mvc = MockMvcBuilders
             .standaloneSetup(new ApiController(null, connections, null, null,
-                    new TuneBridgeProperties(), null, null,
+                    new TuneBridgeProperties(), securityProps, null, null,
                     new NeteaseQrLoginService(client, connections)))
             .setControllerAdvice(new ApiExceptionHandler()).build();
 
