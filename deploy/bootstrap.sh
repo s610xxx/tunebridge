@@ -73,6 +73,17 @@ command -v keytool >/dev/null || die "缺少 keytool，请安装 JDK 而非仅 J
 if [ -z "$JAR" ]; then
     command -v git >/dev/null || install_pkgs git
     command -v mvn >/dev/null || install_pkgs maven
+    if [ ! -f /root/.m2/settings.xml ]; then
+        log "配置 Maven 阿里云镜像（国内直连 Central 很慢）"
+        mkdir -p /root/.m2
+        cat > /root/.m2/settings.xml <<'MVN'
+<settings><mirrors><mirror>
+  <id>aliyun</id><name>aliyun public</name>
+  <url>https://maven.aliyun.com/repository/public</url>
+  <mirrorOf>central</mirrorOf>
+</mirror></mirrors></settings>
+MVN
+    fi
     SRC=/opt/tunebridge-src
     if [ -d "$SRC/.git" ]; then
         log "更新源码 $SRC"
