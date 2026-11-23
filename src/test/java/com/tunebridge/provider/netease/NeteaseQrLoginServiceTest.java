@@ -114,4 +114,29 @@ class NeteaseQrLoginServiceTest {
         assertThat(view.message()).contains("确认");
         verify(connections, never()).connect(any(), any(), anyString(), any());
     }
+
+    @Test
+    void reportsTheUpstreamCodeWhenTheLoginStateIsUnexpected() {
+        MockHttpSession session = new MockHttpSession();
+        String loginId = service.start(session).loginId();
+        when(client.pollQr("unikey-1")).thenReturn(new QrStatus(502, "该账号存在风险，请稍后再试", ""));
+
+        NeteaseQrLoginService.PollView view = service.poll(session, loginId);
+
+        assertThat(view.state()).isEqualTo("failed");
+        assertThat(view.message()).contains("502").contains("该账号存在风险");
+        verify(connections, never()).connect(any(), any(), anyString(), any());
+    }
+
+    @Test
+    void reportsAMissingLoginCodeWithoutAnEmptyStatusCode() {
+        MockHttpSession session = new MockHttpSession();
+        String loginId = service.start(session).loginId();
+        when(client.pollQr("unikey-1")).thenReturn(new QrStatus(0, "", ""));
+
+        NeteaseQrLoginService.PollView view = service.poll(session, loginId);
+
+        assertThat(view.state()).isEqualTo("failed");
+        assertThat(view.message()).contains("响应里没有登录状态码").doesNotContain("状态码 0");
+    }
 }

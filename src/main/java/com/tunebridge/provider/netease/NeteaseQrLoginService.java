@@ -9,6 +9,8 @@ import java.security.SecureRandom;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
@@ -17,6 +19,8 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class NeteaseQrLoginService {
+
+    private static final Logger log = LoggerFactory.getLogger(NeteaseQrLoginService.class);
     private static final long TTL_MILLIS = 120_000L;
     private static final long MIN_POLL_MILLIS = 900L;
     private static final int MAX_PENDING = 64;
@@ -83,8 +87,16 @@ public class NeteaseQrLoginService {
             case 802 -> new PollView("scanned", "已扫码，请在手机上确认", "");
             case 800 -> new PollView("expired", "二维码已过期，请重新获取", "");
             case 803 -> connected(entry, session, status.cookie());
-            default -> new PollView("failed", "网易云登录状态异常，请重新获取二维码", "");
+            default -> unexpected(status);
         };
+    }
+
+    /** 上游给出预期外的状态时，把状态码和原文一起回报，否则用户和服务端都只能看到一句无信息量的「异常」。 */
+    private PollView unexpected(QrStatus status) {
+        String detail = status.code() == 0 ? "响应里没有登录状态码"
+                : "状态码 " + status.code() + (status.message().isBlank() ? "" : "：" + status.message());
+        log.warn("Unexpected NetEase QR login state: {}", detail);
+        return new PollView("failed", "网易云登录状态异常（" + detail + "），请重新获取二维码", "");
     }
 
     private PollView connected(Pending entry, HttpSession session, String cookie) {
