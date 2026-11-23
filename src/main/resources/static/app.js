@@ -71,6 +71,7 @@
             'connectDemoBtn', 'realQQ', 'qqCookie', 'connectQQReal', 'realApple', 'appleAuthBtn',
             'realNetease', 'neteasePairingCode', 'neteaseAuthNote', 'connectNeteaseReal',
             'neteaseExplanation', 'neteasePairingBox', 'neteaseCliNote', 'connectDivider',
+            'neteaseCookie', 'neteaseCookieBox', 'connectNeteaseCookie',
             'neteaseQrBox', 'neteaseQrImage', 'neteaseQrLoading', 'neteaseQrStatus',
             'neteaseQrLink', 'neteaseQrRefresh',
             'appleAuthNote', 'appleTokenInput', 'connectAppleToken', 'appleWriteNote', 'disconnectBtn', 'progressModal',
@@ -1189,6 +1190,32 @@
         } finally {
             setButtonBusy(els.connectNeteaseReal, false);
             els.connectNeteaseReal.disabled = state.config.neteaseRealReady !== true;
+        }
+    }
+
+    async function connectRealNeteaseCookie() {
+        if (!requireLogin()) return;
+        const generation = authGeneration;
+        const cookie = els.neteaseCookie.value.trim();
+        els.neteaseCookie.value = '';
+        if (!cookie) {
+            toast('请输入网易云音乐 Cookie', 'error');
+            els.neteaseCookie.focus();
+            return;
+        }
+        setButtonBusy(els.connectNeteaseCookie, true, '正在连接…');
+        try {
+            await api('/api/connections/NETEASE_MUSIC', {
+                method: 'POST', body: { mode: 'real', cookie }
+            });
+            if (connectProvider === 'NETEASE_MUSIC') closeModal(els.connectModal);
+            await refreshState();
+            checkGeneration(generation);
+            toast('网易云 Cookie 已连接', 'success');
+        } catch (error) {
+            toast('网易云连接失败，请检查 Cookie 是否有效', 'error', 7000);
+        } finally {
+            setButtonBusy(els.connectNeteaseCookie, false);
         }
     }
 
@@ -2940,6 +2967,7 @@
 
         els.connectQQReal.addEventListener('click', connectRealQq);
         els.connectNeteaseReal.addEventListener('click', connectRealNetease);
+        els.connectNeteaseCookie.addEventListener('click', connectRealNeteaseCookie);
         els.neteaseQrRefresh.addEventListener('click', startNeteaseQrLogin);
         els.connectAppleToken.addEventListener('click', () => connectRealApple(els.appleTokenInput.value.trim()));
 

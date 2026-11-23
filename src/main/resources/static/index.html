@@ -284,6 +284,11 @@
                 <label class="field-label" for="neteasePairingCode">本机操作员设置的配对码</label><input id="neteasePairingCode" class="text-input" type="password" autocomplete="off" spellcheck="false" aria-describedby="neteaseAuthNote" placeholder="输入配对码">
                 <button type="button" class="btn btn-primary btn-block netease-connect" id="connectNeteaseReal">验证并连接本机 CLI</button>
             </div>
+            <div id="neteaseCookieBox" class="is-hidden">
+                <label class="field-label" for="neteaseCookie">music.163.com Cookie</label><textarea id="neteaseCookie" class="text-area" rows="4" spellcheck="false" placeholder="粘贴完整 Cookie，例如：MUSIC_U=...; NMTID=..."></textarea>
+                <details class="help"><summary>如何获取网易云音乐 Cookie？</summary><ol><li>在浏览器登录 <b>music.163.com</b>；</li><li>按 F12 打开开发者工具，切换到 Network；</li><li>刷新页面，点击任意一个 music.163.com 请求；</li><li>在 Request Headers 中找到 <b>Cookie</b>，复制整段值粘贴到上方。</li></ol><p>Cookie 的有效期由平台决定。音桥只把 Cookie 存在当前会话内存中。</p></details>
+                <button type="button" class="btn btn-primary btn-block netease-connect" id="connectNeteaseCookie">使用 Cookie 连接</button>
+            </div>
             <p class="form-note" id="neteaseCliNote">断开音桥连接不等于退出 CLI；CLI 的账号状态可能保存在服务器本机。</p>
         </div>
         <p class="security-note"><svg class="icon" aria-hidden="true"><use href="#icon-shield"/></svg>请勿向他人透露凭据、二维码或配对码。网易云登录态只保存在当前会话，断开连接即失效；本机 CLI 的账号状态可能保存在服务器本机，断开音桥连接不会退出 CLI。</p>
