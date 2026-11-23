@@ -23,7 +23,7 @@ if ! command -v node >/dev/null 2>&1; then
     fi
 else
     NODE_VER=$(node --version | sed 's/^v//' | cut -d. -f1)
-    [ "${NODE_VER:-0}" -ge 20 ] || die "Node.js 版本过低（需要 20+），当前：$(node --version）"
+    [ "${NODE_VER:-0}" -ge 20 ] || die "Node.js 版本过低（需要 20+），当前：$(node --version)"
     log "Node.js 已安装：$(node --version)"
 fi
 
