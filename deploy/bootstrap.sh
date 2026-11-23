@@ -149,15 +149,19 @@ REG_CODE=$(prev TUNEBRIDGE_REGISTRATION_CODE)
 REG_CODE=${REG_CODE:-$(openssl rand -base64 64 | tr -dc 'A-Za-z0-9' | cut -c1-40)}
 [ "${#REG_CODE}" -ge 32 ] && [ "${#REG_CODE}" -le 128 ] || die "邀请码长度不合规"
 
-if [ ! -s "$ETC_DIR/keystore.p12" ]; then
+KS_HOST_FILE=$ETC_DIR/keystore.host
+# SAN 必须等于 TUNEBRIDGE_PUBLIC_ORIGIN 的主机部分，换 IP 后旧证书既过不了 TLS 主机名校验、也过不了 Host 头鉴权
+if [ ! -s "$ETC_DIR/keystore.p12" ] || [ "$(head -1 "$KS_HOST_FILE" 2>/dev/null)" != "$KS_HOST" ]; then
     log "生成自签证书（SAN=$KS_HOST，397 天）"
     # 半路失败留下的 0 字节 keystore 会让后续每次重跑都跳过生成，且只在 TLS 握手时才炸
+    if [ -f "$ETC_DIR/keystore.p12" ]; then mv -f "$ETC_DIR/keystore.p12" "$ETC_DIR/keystore.p12.bak"; fi
     if ! KS_ERR=$("$JAVA_HOME/bin/keytool" -genkeypair -alias tunebridge -keyalg RSA -keysize 2048 -validity 397 \
         -dname "CN=$KS_HOST" -ext "SAN=dns:$KS_HOST,ip:$KS_HOST" \
         -keystore "$ETC_DIR/keystore.p12" -storetype PKCS12 -storepass "$KS_PASS" 2>&1); then
         printf '%s\n' "$KS_ERR" >&2
         die "keytool 生成证书失败"
     fi
+    printf '%s\n' "$KS_HOST" > "$KS_HOST_FILE"
 fi
 chown "root:$RUN_USER" "$ETC_DIR/keystore.p12"
 chmod 640 "$ETC_DIR/keystore.p12"
