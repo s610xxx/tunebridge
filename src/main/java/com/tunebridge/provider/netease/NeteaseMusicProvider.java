@@ -52,9 +52,17 @@ public class NeteaseMusicProvider implements MusicProvider {
             return new ProviderConnection(id(), ConnectionMode.REAL, "网易云音乐 · " + nickname,
                     Map.of("neteaseCookie", cookie));
         }
+        // 配对码连接：PUBLIC 和 LOCAL 模式都支持
+        if (!access.enabled()) {
+            throw ProviderException.notConfigured("网易云本机模式尚未启用，请配置配对码或使用扫码登录");
+        }
         String grant = access.authorize(credentials == null ? null : credentials.get("pairingCode"));
         try {
-            access.withGrant(grant, () -> { client.validateLogin(); return null; });
+            // PUBLIC 模式下不调用 CLI 验证登录态（避免子进程调用），LOCAL 模式下需要验证
+            boolean isPublic = "PUBLIC".equalsIgnoreCase(System.getenv("TUNEBRIDGE_SECURITY_MODE"));
+            if (!isPublic) {
+                access.withGrant(grant, () -> { client.validateLogin(); return null; });
+            }
             return new ProviderConnection(id(), ConnectionMode.REAL, "网易云音乐 · 本机账号",
                     Map.of("neteaseGrant", grant));
         } catch (RuntimeException ex) {
