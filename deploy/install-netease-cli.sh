@@ -16,7 +16,8 @@ if ! command -v node >/dev/null 2>&1; then
         curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
         DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
     elif command -v dnf >/dev/null 2>&1; then
-        dnf -y -q module enable nodejs:20
+        # RHEL/CentOS/Fedora：用 Nodesource 官方脚本，避免 dnf module 兼容性问题
+        curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
         dnf -y -q install nodejs
     else
         die "只支持 apt 或 dnf 发行版"
