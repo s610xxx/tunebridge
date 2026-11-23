@@ -278,17 +278,32 @@
                 </div>
                 <p class="form-note">扫码登录后，音桥只在当前会话内保存网易云登录态，用于创建与写入歌单。</p>
             </div>
+            <div id="neteaseCliLoginBox" class="is-hidden">
+                <div class="netease-qr-stage">
+                    <div class="netease-qr-frame"><div class="netease-qr-image" id="neteaseCliQrImage" role="img" aria-label="ncm-cli 登录二维码"></div><span class="netease-qr-loading" id="neteaseCliQrLoading">正在获取二维码…</span></div>
+                    <div class="netease-qr-side">
+                        <p class="netease-qr-status" id="neteaseCliQrStatus" role="status">等待扫码…</p>
+                        <ol class="netease-qr-steps"><li>打开网易云音乐 App 的扫一扫</li><li>扫描左侧二维码</li><li>在手机上确认登录</li></ol>
+                        <p class="netease-qr-alt"><a href="#" id="neteaseCliQrLink" target="_blank" rel="noopener noreferrer">在浏览器打开授权链接</a></p>
+                        <button type="button" class="btn btn-outline btn-small" id="neteaseCliQrRefresh">刷新二维码</button>
+                    </div>
+                </div>
+                <p class="form-note error-note">⚠️ 数据中心 IP 限制：此二维码可能无法正常工作（错误码 8821）。建议使用下方的 Cookie 登录方式。</p>
+            </div>
             <p class="netease-explanation" id="neteaseExplanation">真实模式使用服务器运行用户已登录的本机 CLI，并非多用户账号授权。配对码由本机操作员设置，不是平台 Key 或 Secret。</p>
             <p class="form-note" id="neteaseAuthNote" role="status"></p>
             <div id="neteasePairingBox">
                 <label class="field-label" for="neteasePairingCode">本机操作员设置的配对码</label><input id="neteasePairingCode" class="text-input" type="password" autocomplete="off" spellcheck="false" aria-describedby="neteaseAuthNote" placeholder="输入配对码">
                 <button type="button" class="btn btn-primary btn-block netease-connect" id="connectNeteaseReal">验证并连接本机 CLI</button>
             </div>
-            <div id="neteaseCookieBox" class="is-hidden">
+            <div id="neteaseCookieBox">
+                <h4 style="margin:0 0 8px 0;">🔑 Cookie 登录（推荐）</h4>
+                <p class="form-note" style="margin-bottom:12px;">由于服务器位于数据中心，扫码登录会被网易云拦截（错误码 8821）。请使用 Cookie 登录：</p>
                 <label class="field-label" for="neteaseCookie">music.163.com Cookie</label><textarea id="neteaseCookie" class="text-area" rows="4" spellcheck="false" placeholder="粘贴完整 Cookie，例如：MUSIC_U=...; NMTID=..."></textarea>
                 <details class="help"><summary>如何获取网易云音乐 Cookie？</summary><ol><li>在浏览器登录 <b>music.163.com</b>；</li><li>按 F12 打开开发者工具，切换到 Network；</li><li>刷新页面，点击任意一个 music.163.com 请求；</li><li>在 Request Headers 中找到 <b>Cookie</b>，复制整段值粘贴到上方。</li></ol><p>Cookie 的有效期由平台决定。音桥只把 Cookie 存在当前会话内存中。</p></details>
                 <button type="button" class="btn btn-primary btn-block netease-connect" id="connectNeteaseCookie">使用 Cookie 连接</button>
             </div>
+            <button type="button" class="btn btn-outline btn-block" id="startNeteaseCliLogin">尝试 ncm-cli 扫码登录（可能被拦截）</button>
             <p class="form-note" id="neteaseCliNote">断开音桥连接不等于退出 CLI；CLI 的账号状态可能保存在服务器本机。</p>
         </div>
         <p class="security-note"><svg class="icon" aria-hidden="true"><use href="#icon-shield"/></svg>请勿向他人透露凭据、二维码或配对码。网易云登录态只保存在当前会话，断开连接即失效；本机 CLI 的账号状态可能保存在服务器本机，断开音桥连接不会退出 CLI。</p>

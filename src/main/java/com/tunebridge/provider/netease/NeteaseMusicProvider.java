@@ -56,7 +56,21 @@ public class NeteaseMusicProvider implements MusicProvider {
         if (!access.enabled()) {
             throw ProviderException.notConfigured("网易云本机模式尚未启用，请配置配对码或使用扫码登录");
         }
-        String grant = access.authorize(credentials == null ? null : credentials.get("pairingCode"));
+        String pairingCode = credentials == null ? null : credentials.get("pairingCode");
+        // 如果配对码为空，说明用户通过 ncm-cli 扫码登录，直接验证 CLI 登录状态
+        if (pairingCode == null || pairingCode.isBlank()) {
+            try {
+                // 验证 ncm-cli 是否已登录
+                client.validateLogin();
+                // 使用一个特殊的 grant 标识这是通过 ncm-cli 登录的连接
+                String grant = "ncm-cli-auto-" + System.currentTimeMillis();
+                return new ProviderConnection(id(), ConnectionMode.REAL, "网易云音乐 · ncm-cli 登录",
+                        Map.of("neteaseGrant", grant));
+            } catch (RuntimeException ex) {
+                throw ProviderException.notConnected("ncm-cli 未登录或登录已过期，请先完成扫码登录");
+            }
+        }
+        String grant = access.authorize(pairingCode);
         try {
             // PUBLIC 模式下不调用 CLI 验证登录态（避免子进程调用），LOCAL 模式下需要验证
             boolean isPublic = "PUBLIC".equalsIgnoreCase(System.getenv("TUNEBRIDGE_SECURITY_MODE"));

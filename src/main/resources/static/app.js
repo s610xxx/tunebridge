@@ -30,6 +30,7 @@
     let jobStatusError = false;
     let connectProvider = null;
     let neteaseQr = { loginId: null, deadline: 0, token: 0, timer: null };
+    let neteaseCliQr = { deadline: 0, token: 0, timer: null };
     let libraryProvider = 'QQ_MUSIC';
     let lastFocused = null;
     let stateLoaded = false;
@@ -74,6 +75,8 @@
             'neteaseCookie', 'neteaseCookieBox', 'connectNeteaseCookie',
             'neteaseQrBox', 'neteaseQrImage', 'neteaseQrLoading', 'neteaseQrStatus',
             'neteaseQrLink', 'neteaseQrRefresh',
+            'neteaseCliLoginBox', 'neteaseCliQrImage', 'neteaseCliQrLoading', 'neteaseCliQrStatus',
+            'neteaseCliQrLink', 'neteaseCliQrRefresh', 'startNeteaseCliLogin',
             'appleAuthNote', 'appleTokenInput', 'connectAppleToken', 'appleWriteNote', 'disconnectBtn', 'progressModal',
             'progressView', 'resultView', 'progressTitle', 'progressStep', 'progressFill',
             'progressPercent', 'statMatched', 'statUnmatched', 'statTotal', 'liveLog', 'progressError',
@@ -1094,13 +1097,18 @@
             els.neteaseCliNote.classList.toggle('is-hidden', !neteaseLocalCli);
             els.connectNeteaseReal.disabled = !ready;
             els.neteasePairingCode.disabled = !ready;
+            els.startNeteaseCliLogin.classList.toggle('is-hidden', !neteaseLocalCli);
             els.neteaseAuthNote.textContent = neteaseLocalCli
                     ? (ready ? '服务器已启用本机 CLI，可扫码登录或输入本机操作员设置的配对码。'
                         : '服务器尚未启用本机 CLI，请使用扫码登录。')
                     : '';
-            startNeteaseQrLogin();
+            // 默认显示 Cookie 登录（因为扫码会被 8821 拦截）
+            els.neteaseCookieBox.classList.remove('is-hidden');
+            stopNeteaseQr();
+            stopNeteaseCliQr();
         } else {
             stopNeteaseQr();
+            stopNeteaseCliQr();
         }
         els.connectDivider.classList.remove('is-hidden');
         els.disconnectBtn.classList.toggle('is-hidden', !connection(provider).connected);
@@ -1293,6 +1301,89 @@
             const remaining = Math.max(0, Math.ceil((neteaseQr.deadline - Date.now()) / 1000));
             neteaseQrNote(`${view.message || '等待扫码'} · 剩余 ${remaining} 秒`, true);
             neteaseQrTick(token, generation, view.state === 'scanned' ? 900 : 1500);
+        }, delay);
+    }
+
+    /* ---------------- ncm-cli 登录 ---------------- */
+
+    function stopNeteaseCliQr() {
+        neteaseCliQr.token += 1;
+        if (neteaseCliQr.timer) window.clearTimeout(neteaseCliQr.timer);
+        neteaseCliQr.timer = null;
+    }
+
+    function neteaseCliQrNote(message, live) {
+        els.neteaseCliQrStatus.textContent = message;
+        els.neteaseCliQrStatus.classList.toggle('is-live', live === true);
+    }
+
+    async function startNeteaseCliLogin() {
+        if (!requireLogin()) return;
+        const generation = authGeneration;
+        stopNeteaseCliQr();
+        const token = neteaseCliQr.token;
+        els.neteaseCliLoginBox.classList.remove('is-hidden');
+        els.neteaseCliQrLoading.classList.remove('is-hidden');
+        els.neteaseCliQrImage.innerHTML = '';
+        els.neteaseCliQrLink.href = '#';
+        els.neteaseCliQrRefresh.disabled = true;
+        neteaseCliQrNote('正在获取二维码…', true);
+        try {
+            const result = await api('/api/connections/netease/cli-login', { method: 'POST' });
+            if (token !== neteaseCliQr.token || generation !== authGeneration) return;
+            neteaseCliQr.deadline = Date.now() + 300 * 1000; // 5分钟过期
+            els.neteaseCliQrLoading.classList.add('is-hidden');
+            // 生成二维码 SVG（使用 qrcode.js 或简单的链接）
+            els.neteaseCliQrImage.innerHTML = `<a href="${result.clickableUrl}" target="_blank" rel="noopener noreferrer"><img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(result.clickableUrl)}" alt="ncm-cli 登录二维码" style="width:200px;height:200px;"></a>`;
+            els.neteaseCliQrLink.href = result.clickableUrl;
+            els.neteaseCliQrRefresh.disabled = false;
+            neteaseCliQrTick(token, generation, 2000);
+        } catch (error) {
+            if (token !== neteaseCliQr.token || generation !== authGeneration) return;
+            els.neteaseCliQrLoading.classList.add('is-hidden');
+            els.neteaseCliQrRefresh.disabled = false;
+            neteaseCliQrNote(error.message || '二维码获取失败，请点击刷新重试', false);
+        }
+    }
+
+    function neteaseCliQrTick(token, generation, delay) {
+        neteaseCliQr.timer = window.setTimeout(async () => {
+            neteaseCliQr.timer = null;
+            if (token !== neteaseCliQr.token || generation !== authGeneration) return;
+            if (Date.now() >= neteaseCliQr.deadline) {
+                neteaseCliQrNote('二维码已过期，请点击刷新重新获取', false);
+                return;
+            }
+            let status;
+            try {
+                status = await api('/api/connections/netease/cli-login/status');
+            } catch (error) {
+                if (token !== neteaseCliQr.token || generation !== authGeneration) return;
+                neteaseCliQrNote(error.message || '状态查询失败，请重试', false);
+                return;
+            }
+            if (token !== neteaseCliQr.token || generation !== authGeneration) return;
+            if (status.status === 'logged_in') {
+                stopNeteaseCliQr();
+                // 自动建立连接（使用专用的 ncm-cli 连接 API）
+                try {
+                    await api('/api/connections/netease/cli-connect', { method: 'POST' });
+                    closeModal(els.connectModal);
+                    await refreshState();
+                    if (generation !== authGeneration) return;
+                    toast('网易云音乐已通过 ncm-cli 登录', 'success');
+                } catch (error) {
+                    neteaseCliQrNote('登录成功但连接失败：' + error.message, false);
+                }
+                return;
+            }
+            if (status.status === 'error') {
+                neteaseCliQrNote(status.message || '登录检查出错', false);
+                return;
+            }
+            const remaining = Math.max(0, Math.ceil((neteaseCliQr.deadline - Date.now()) / 1000));
+            neteaseCliQrNote(`${status.message || '等待扫码'} · 剩余 ${remaining} 秒`, true);
+            neteaseCliQrTick(token, generation, 2000);
         }, delay);
     }
 
@@ -2969,6 +3060,8 @@
         els.connectNeteaseReal.addEventListener('click', connectRealNetease);
         els.connectNeteaseCookie.addEventListener('click', connectRealNeteaseCookie);
         els.neteaseQrRefresh.addEventListener('click', startNeteaseQrLogin);
+        els.startNeteaseCliLogin.addEventListener('click', startNeteaseCliLogin);
+        els.neteaseCliQrRefresh.addEventListener('click', startNeteaseCliLogin);
         els.connectAppleToken.addEventListener('click', () => connectRealApple(els.appleTokenInput.value.trim()));
 
         els.appleAuthBtn.addEventListener('click', async () => {
