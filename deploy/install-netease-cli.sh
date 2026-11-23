@@ -16,9 +16,19 @@ if ! command -v node >/dev/null 2>&1; then
         curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
         DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
     elif command -v dnf >/dev/null 2>&1; then
-        # RHEL/CentOS/Fedora：用 Nodesource 官方脚本，避免 dnf module 兼容性问题
-        curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-        dnf -y -q install nodejs
+        # RHEL/CentOS/Alibaba Cloud Linux：先试 EPEL，再用 dnf/yum 装 nodejs
+        if ! rpm -q epel-release >/dev/null 2>&1; then
+            log "安装 EPEL 源"
+            dnf -y -q install epel-release || true
+        fi
+        # Alibaba Cloud Linux / CentOS 8+ 的 AppStream 里有 nodejs:20
+        if dnf module list nodejs 2>/dev/null | grep -q "20"; then
+            dnf -y -q module enable nodejs:20
+            dnf -y -q install nodejs
+        else
+            #  fallback：直接装 nodejs（可能版本较低，但 ncm-cli 通常兼容）
+            dnf -y -q install nodejs npm
+        fi
     else
         die "只支持 apt 或 dnf 发行版"
     fi
