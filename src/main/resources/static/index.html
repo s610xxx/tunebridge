@@ -117,7 +117,7 @@
                         <article class="provider-card" data-provider-card="NETEASE_MUSIC">
                             <div class="provider-head">
                                 <div class="provider-icon netease"><svg class="icon" aria-hidden="true"><use href="#icon-note"/></svg></div>
-                                <div class="provider-title"><h3>网易云音乐</h3><p>本机 CLI 账号连接</p></div>
+                                <div class="provider-title"><h3>网易云音乐</h3><p>演示授权；本机部署可连 CLI 账号</p></div>
                                 <button type="button" class="connect-btn" data-connect="NETEASE_MUSIC" aria-label="连接或管理网易云音乐">连接</button>
                             </div>
                             <div class="provider-base"><span class="role-badge" data-role="NETEASE_MUSIC">未选用</span><span class="connection-state" id="status-NETEASE_MUSIC"><i></i>未连接</span></div>
@@ -234,7 +234,7 @@
             <div class="how-grid">
                 <article class="how-card"><span class="provider-dot qq"></span><h3>QQ 音乐</h3><p>公开歌单免平台登录读取。私有歌单、创建歌单与加歌需要有效 Cookie；平台风控可能影响写入。</p></article>
                 <article class="how-card"><span class="provider-dot apple"></span><h3>Apple Music</h3><p>需要配置开发者令牌并完成用户授权。确认迁移后，新歌单写入你的 iCloud 音乐资料库。</p></article>
-                <article class="how-card"><span class="provider-dot netease"></span><h3>网易云音乐</h3><p>仅支持 QQ 到网易云。使用服务器运行用户已登录的本机 CLI，不是多用户授权；断开音桥不会退出 CLI。</p></article>
+                <article class="how-card"><span class="provider-dot netease"></span><h3>网易云音乐</h3><p>仅支持 QQ 到网易云。真实连接使用服务器运行用户已登录的本机 CLI，只在单机部署可用；公网部署走演示授权。</p></article>
             </div>
             <div class="real-note"><svg class="icon" aria-hidden="true"><use href="#icon-help"/></svg><p>同一首歌可能有不同版本。请核对匹配结果中的歌手、专辑和 Live / Remix 提示；如果写入结果不确定，先检查目标歌单，不要重复提交。</p></div>
         </section>
@@ -252,7 +252,7 @@
         <button type="button" class="modal-close" data-close-modal aria-label="关闭">×</button>
         <div class="modal-head"><div class="provider-icon large" id="connectIcon"></div><div><h3 id="connectTitle">连接平台</h3><p id="connectSubtitle">选择演示授权或真实账号</p></div></div>
         <div class="demo-option"><div><strong>演示授权</strong><p>使用内置曲库，不访问真实账号；请同时使用演示来源。</p></div><button type="button" class="btn btn-soft" id="connectDemoBtn">一键连接</button></div>
-        <div class="divider"><span>或使用真实账号</span></div>
+        <div class="divider" id="connectDivider"><span>或使用真实账号</span></div>
         <div id="realQQ" class="real-form is-hidden">
             <label class="field-label" for="qqCookie">y.qq.com Cookie</label><textarea id="qqCookie" class="text-area" rows="4" spellcheck="false" placeholder="粘贴完整 Cookie，例如：uin=o0123456789; qm_keyst=..."></textarea>
             <details class="help"><summary>如何获取 QQ 音乐 Cookie？</summary><ol><li>在浏览器登录 <b>y.qq.com</b>；</li><li>按 F12 打开开发者工具，切换到 Network；</li><li>刷新页面，点击任意一个 y.qq.com 请求；</li><li>在 Request Headers 中找到 <b>Cookie</b>，复制整段值粘贴到上方。</li></ol><p>Cookie 的有效期由平台决定。音桥只把 Cookie 存在当前会话内存中。</p></details>
@@ -263,10 +263,13 @@
             <details class="help"><summary>手动粘贴 Music-User-Token</summary><label class="field-label" for="appleTokenInput">Music-User-Token</label><input id="appleTokenInput" class="text-input" type="text" autocomplete="off" placeholder="粘贴 Music-User-Token"><button type="button" class="btn btn-outline btn-block" id="connectAppleToken">验证并连接</button></details>
         </div>
         <div id="realNetease" class="real-form is-hidden">
-            <p class="netease-explanation">真实模式使用服务器运行用户已登录的本机 CLI，并非多用户账号授权。配对码由本机操作员设置，不是平台 Key 或 Secret。</p>
+            <p class="netease-explanation" id="neteaseExplanation">真实模式使用服务器运行用户已登录的本机 CLI，并非多用户账号授权。配对码由本机操作员设置，不是平台 Key 或 Secret。</p>
             <p class="form-note" id="neteaseAuthNote" role="status"></p>
-            <label class="field-label" for="neteasePairingCode">本机操作员设置的配对码</label><input id="neteasePairingCode" class="text-input" type="password" autocomplete="off" spellcheck="false" aria-describedby="neteaseAuthNote" placeholder="输入配对码">
-            <button type="button" class="btn btn-primary btn-block netease-connect" id="connectNeteaseReal">验证并连接本机 CLI</button><p class="form-note">断开音桥连接不等于退出 CLI；CLI 的账号状态可能保存在服务器本机。</p>
+            <div id="neteasePairingBox">
+                <label class="field-label" for="neteasePairingCode">本机操作员设置的配对码</label><input id="neteasePairingCode" class="text-input" type="password" autocomplete="off" spellcheck="false" aria-describedby="neteaseAuthNote" placeholder="输入配对码">
+                <button type="button" class="btn btn-primary btn-block netease-connect" id="connectNeteaseReal">验证并连接本机 CLI</button>
+            </div>
+            <p class="form-note" id="neteaseCliNote">断开音桥连接不等于退出 CLI；CLI 的账号状态可能保存在服务器本机。</p>
         </div>
         <p class="security-note"><svg class="icon" aria-hidden="true"><use href="#icon-shield"/></svg>请勿向他人透露凭据或配对码。网易云 CLI 登录状态可能保存在服务器本机，断开音桥连接不会退出 CLI。</p>
         <button type="button" class="text-link danger is-hidden" id="disconnectBtn">断开当前平台连接</button>

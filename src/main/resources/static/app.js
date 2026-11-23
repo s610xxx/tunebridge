@@ -69,6 +69,7 @@
             'status-APPLE_MUSIC', 'status-NETEASE_MUSIC', 'connectModal', 'connectTitle', 'connectSubtitle', 'connectIcon',
             'connectDemoBtn', 'realQQ', 'qqCookie', 'connectQQReal', 'realApple', 'appleAuthBtn',
             'realNetease', 'neteasePairingCode', 'neteaseAuthNote', 'connectNeteaseReal',
+            'neteaseExplanation', 'neteasePairingBox', 'neteaseCliNote', 'connectDivider',
             'appleAuthNote', 'appleTokenInput', 'connectAppleToken', 'disconnectBtn', 'progressModal',
             'progressView', 'resultView', 'progressTitle', 'progressStep', 'progressFill',
             'progressPercent', 'statMatched', 'statUnmatched', 'statTotal', 'liveLog', 'progressError',
@@ -1068,11 +1069,14 @@
         connectProvider = provider;
         clearSensitiveInputs();
         els.connectTitle.textContent = `连接 ${providerLabel(provider)}`;
+        const neteaseLocalCli = auth.mode === 'local';
         els.connectSubtitle.textContent = provider === 'QQ_MUSIC'
                 ? '公开歌单可直接读取；连接后可创建并写入歌单'
                 : provider === 'APPLE_MUSIC'
                     ? '授权后，新歌单会写入你的 iCloud 音乐资料库'
-                    : '仅作为 QQ 音乐的目标；真实模式使用服务器本机 CLI';
+                    : neteaseLocalCli
+                        ? '仅作为 QQ 音乐的目标；真实模式使用服务器本机 CLI'
+                        : '仅作为 QQ 音乐的目标；公网部署只提供演示授权';
         const iconSource = document.querySelector(`[data-provider-card="${provider}"] .provider-icon`);
         els.connectIcon.className = `provider-icon large ${PROVIDERS[provider].dot}`;
         els.connectIcon.innerHTML = iconSource ? iconSource.innerHTML : '';
@@ -1080,14 +1084,19 @@
         els.realApple.classList.toggle('is-hidden', provider !== 'APPLE_MUSIC');
         els.realNetease.classList.toggle('is-hidden', provider !== 'NETEASE_MUSIC');
         if (provider === 'NETEASE_MUSIC') {
-            const ready = auth.mode === 'local' && state.config.neteaseRealReady === true;
+            // 公网部署在启动阶段就禁止本机 CLI 配置，留一个点不亮的配对码输入框只会让人去找不存在的配对码
+            const ready = neteaseLocalCli && state.config.neteaseRealReady === true;
+            els.neteaseExplanation.classList.toggle('is-hidden', !neteaseLocalCli);
+            els.neteasePairingBox.classList.toggle('is-hidden', !neteaseLocalCli);
+            els.neteaseCliNote.classList.toggle('is-hidden', !neteaseLocalCli);
             els.connectNeteaseReal.disabled = !ready;
             els.neteasePairingCode.disabled = !ready;
-            els.neteaseAuthNote.textContent = auth.mode === 'public'
-                    ? '公开多用户服务不提供真实网易云本机 CLI，避免共享服务器上的平台账号；可使用演示授权。'
-                    : ready ? '服务器已启用本机 CLI，请输入本机操作员设置的配对码。'
-                        : '服务器尚未启用本机 CLI，无法连接真实网易云；可使用演示授权。';
+            els.neteaseAuthNote.textContent = neteaseLocalCli
+                    ? (ready ? '服务器已启用本机 CLI，请输入本机操作员设置的配对码。'
+                        : '服务器尚未启用本机 CLI，无法连接真实网易云；可使用演示授权。')
+                    : '公开多用户服务不提供真实网易云本机 CLI，避免共享服务器上的平台账号；可使用演示授权。';
         }
+        els.connectDivider.classList.toggle('is-hidden', provider === 'NETEASE_MUSIC' && !neteaseLocalCli);
         els.disconnectBtn.classList.toggle('is-hidden', !connection(provider).connected);
         els.disconnectBtn.textContent = `断开 ${providerLabel(provider)} 连接`;
         if (provider === 'APPLE_MUSIC') {
