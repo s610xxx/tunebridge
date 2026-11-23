@@ -18,13 +18,15 @@ import org.springframework.stereotype.Component;
 @Component
 public class NeteaseMusicProvider implements MusicProvider {
     private final NeteaseMusicClient client;
+    private final NeteaseWebClient webClient;
     private final NeteaseLocalAccess access;
     private final DemoCatalog catalog;
     private final DemoStore store;
 
-    public NeteaseMusicProvider(NeteaseMusicClient client, NeteaseLocalAccess access,
-                                DemoCatalog catalog, DemoStore store) {
+    public NeteaseMusicProvider(NeteaseMusicClient client, NeteaseWebClient webClient,
+                                NeteaseLocalAccess access, DemoCatalog catalog, DemoStore store) {
         this.client = client;
+        this.webClient = webClient;
         this.access = access;
         this.catalog = catalog;
         this.store = store;
@@ -44,6 +46,12 @@ public class NeteaseMusicProvider implements MusicProvider {
 
     @Override
     public ProviderConnection connectReal(Map<String, String> credentials) {
+        String cookie = credentials == null || credentials.get("cookie") == null ? "" : credentials.get("cookie");
+        if (!cookie.isBlank()) {
+            String nickname = webClient.accountName(cookie);
+            return new ProviderConnection(id(), ConnectionMode.REAL, "网易云音乐 · " + nickname,
+                    Map.of("neteaseCookie", cookie));
+        }
         String grant = access.authorize(credentials == null ? null : credentials.get("pairingCode"));
         try {
             access.withGrant(grant, () -> { client.validateLogin(); return null; });
@@ -68,6 +76,8 @@ public class NeteaseMusicProvider implements MusicProvider {
     @Override
     public List<Track> searchTracks(ProviderConnection connection, String title, String artist, int limit) {
         if (isDemo(connection)) return catalog.targetCatalog(id());
+        String cookie = webCookie(connection);
+        if (cookie != null) return webClient.searchTracks(cookie, title, artist, limit);
         return access.withGrant(grant(connection), () -> client.searchTracks(title, artist, limit));
     }
 
@@ -77,6 +87,8 @@ public class NeteaseMusicProvider implements MusicProvider {
             Playlist playlist = store.create(sessionId(connection), id(), name, description);
             return CreatedPlaylist.of(playlist.id(), playlist.name(), playlist.webUrl(), 0);
         }
+        String cookie = webCookie(connection);
+        if (cookie != null) return webClient.createPlaylist(cookie, name);
         return access.withGrant(grant(connection), () -> client.createPlaylist(name));
     }
 
@@ -86,11 +98,25 @@ public class NeteaseMusicProvider implements MusicProvider {
             store.addTracks(sessionId(connection), id(), playlist.id(), tracks);
             return;
         }
+        String cookie = webCookie(connection);
+        if (cookie != null) {
+            webClient.addTracks(cookie, playlist, tracks);
+            return;
+        }
         access.withGrant(grant(connection), () -> { client.addTracks(playlist, tracks); return null; });
     }
 
     private boolean isDemo(ProviderConnection connection) {
         return connection != null && connection.provider() == id() && connection.mode() == ConnectionMode.DEMO;
+    }
+
+    /** 网页端登录返回该连接的凭据；本机 CLI 连接返回 null，交给 grant 分支。 */
+    private String webCookie(ProviderConnection connection) {
+        if (connection == null || connection.provider() != id() || connection.mode() != ConnectionMode.REAL) {
+            throw ProviderException.notConnected("请先连接网易云音乐目标账号");
+        }
+        String cookie = connection.credential("neteaseCookie");
+        return cookie == null || cookie.isBlank() ? null : cookie;
     }
 
     private String grant(ProviderConnection connection) {

@@ -51,7 +51,7 @@ public class AppleDeveloperTokenService {
         }
         if (!configured()) {
             throw ProviderException.notConfigured(
-                    "服务端未配置 Apple 开发者令牌，暂时无法连接真实 Apple Music；可以先使用演示模式体验");
+                    "服务端未配置 Apple 开发者令牌：迁入 Apple Music 需要它，读取资料库会改用 Apple 网页版通道");
         }
         synchronized (this) {
             long now = Instant.now().getEpochSecond();

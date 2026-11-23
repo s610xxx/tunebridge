@@ -339,8 +339,21 @@ input::placeholder, textarea::placeholder { color: #657387; }
 .help .btn-block { margin-top: 10px; }
 .apple-auth-box { padding: 16px; border: 1px solid var(--line); border-radius: 8px; }
 .form-note { font-size: 12px; color: var(--ink-mute); margin-top: 10px; }
+.form-note.is-warn { color: var(--amber); }
 .netease-explanation { font-size: 13px; color: var(--ink-soft); }
 .netease-connect { margin-top: 12px; }
+.netease-qr-box { margin-bottom: 18px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.netease-qr-stage { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.netease-qr-frame { position: relative; flex: 0 0 auto; width: 168px; height: 168px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; overflow: hidden; }
+.netease-qr-image svg { display: block; width: 168px; height: 168px; }
+.netease-qr-loading { position: absolute; inset: 0; display: grid; place-items: center; padding: 12px; background: rgba(255, 255, 255, .92); font-size: 12px; color: var(--ink-mute); text-align: center; }
+.netease-qr-side { flex: 1 1 200px; min-width: 0; }
+.netease-qr-status { font-size: 13px; color: var(--ink-soft); }
+.netease-qr-status.is-live { color: var(--blue); font-weight: 600; }
+.netease-qr-steps { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: 12px; color: var(--ink-mute); }
+.netease-qr-alt { margin-top: 10px; font-size: 12px; color: var(--ink-mute); }
+.netease-qr-alt a { color: var(--blue); text-decoration: underline; text-underline-offset: 3px; }
+.netease-qr-box .btn-small { margin-top: 12px; }
 .security-note { display: flex; align-items: flex-start; gap: 8px; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 11px; color: var(--ink-mute); }
 .security-note .icon { width: 16px; height: 16px; margin-top: 2px; color: var(--blue); }
 #disconnectBtn { display: block; margin-top: 12px; }

@@ -95,7 +95,7 @@
                             <label><input type="radio" name="directionChoice" value="APPLE_QQ" aria-label="从 Apple Music 迁移到 QQ 音乐"><span>Apple Music <span aria-hidden="true">→</span> QQ 音乐</span></label>
                             <label><input type="radio" name="directionChoice" value="QQ_NETEASE" aria-label="从 QQ 音乐迁移到网易云音乐"><span>QQ 音乐 <span aria-hidden="true">→</span> 网易云音乐</span></label>
                         </div>
-                        <p id="directionHelp">QQ 与 Apple 支持双向迁移；网易云仅作为目标。</p>
+                        <p id="directionHelp">Apple Music 真实账号只能迁出（写入需要 Apple 开发者账号）；演示模式仍可迁入 Apple。</p>
                     </fieldset>
                     <div class="provider-cards">
                         <article class="provider-card" data-provider-card="QQ_MUSIC">
@@ -109,7 +109,7 @@
                         <article class="provider-card" data-provider-card="APPLE_MUSIC">
                             <div class="provider-head">
                                 <div class="provider-icon apple"><svg class="icon" aria-hidden="true"><use href="#icon-note"/></svg></div>
-                                <div class="provider-title"><h3>Apple Music</h3><p>通过 MusicKit 授权</p></div>
+                                <div class="provider-title"><h3>Apple Music</h3><p>粘贴网页版令牌读取资料库</p></div>
                                 <button type="button" class="connect-btn" data-connect="APPLE_MUSIC" aria-label="连接或管理 Apple Music">连接</button>
                             </div>
                             <div class="provider-base"><span class="role-badge" data-role="APPLE_MUSIC">目标 B</span><span class="connection-state" id="status-APPLE_MUSIC"><i></i>未连接</span></div>
@@ -117,7 +117,7 @@
                         <article class="provider-card" data-provider-card="NETEASE_MUSIC">
                             <div class="provider-head">
                                 <div class="provider-icon netease"><svg class="icon" aria-hidden="true"><use href="#icon-note"/></svg></div>
-                                <div class="provider-title"><h3>网易云音乐</h3><p>演示授权；本机部署可连 CLI 账号</p></div>
+                                <div class="provider-title"><h3>网易云音乐</h3><p>扫码登录真实账号；本机部署也可用 CLI 配对</p></div>
                                 <button type="button" class="connect-btn" data-connect="NETEASE_MUSIC" aria-label="连接或管理网易云音乐">连接</button>
                             </div>
                             <div class="provider-base"><span class="role-badge" data-role="NETEASE_MUSIC">未选用</span><span class="connection-state" id="status-NETEASE_MUSIC"><i></i>未连接</span></div>
@@ -233,8 +233,8 @@
             <div class="section-heading"><div><h2 id="howTitle">开始之前，了解这些</h2><p>迁移的是歌单与歌曲引用，不是音频文件。</p></div></div>
             <div class="how-grid">
                 <article class="how-card"><span class="provider-dot qq"></span><h3>QQ 音乐</h3><p>公开歌单免平台登录读取。私有歌单、创建歌单与加歌需要有效 Cookie；平台风控可能影响写入。</p></article>
-                <article class="how-card"><span class="provider-dot apple"></span><h3>Apple Music</h3><p>需要配置开发者令牌并完成用户授权。确认迁移后，新歌单写入你的 iCloud 音乐资料库。</p></article>
-                <article class="how-card"><span class="provider-dot netease"></span><h3>网易云音乐</h3><p>仅支持 QQ 到网易云。真实连接使用服务器运行用户已登录的本机 CLI，只在单机部署可用；公网部署走演示授权。</p></article>
+                <article class="how-card"><span class="provider-dot apple"></span><h3>Apple Music</h3><p>粘贴 Apple 网页版的 media-user-token，即可列出并读出自己的资料库歌单，迁到 QQ 音乐。真实账号不支持迁入 Apple。</p></article>
+                <article class="how-card"><span class="provider-dot netease"></span><h3>网易云音乐</h3><p>仅支持 QQ 到网易云。真实连接用网易云 App 扫码授权，登录态只保存在当前会话；单机部署还可改用本机 CLI 配对码。</p></article>
             </div>
             <div class="real-note"><svg class="icon" aria-hidden="true"><use href="#icon-help"/></svg><p>同一首歌可能有不同版本。请核对匹配结果中的歌手、专辑和 Live / Remix 提示；如果写入结果不确定，先检查目标歌单，不要重复提交。</p></div>
         </section>
@@ -259,10 +259,25 @@
             <button type="button" class="btn btn-primary btn-block" id="connectQQReal">验证并连接</button>
         </div>
         <div id="realApple" class="real-form is-hidden">
-            <div class="apple-auth-box"><button type="button" class="btn btn-primary btn-block" id="appleAuthBtn">通过 Apple Music 授权</button><p class="form-note" id="appleAuthNote">将打开 Apple 授权窗口，完成后自动返回音桥。</p></div>
-            <details class="help"><summary>手动粘贴 Music-User-Token</summary><label class="field-label" for="appleTokenInput">Music-User-Token</label><input id="appleTokenInput" class="text-input" type="text" autocomplete="off" placeholder="粘贴 Music-User-Token"><button type="button" class="btn btn-outline btn-block" id="connectAppleToken">验证并连接</button></details>
+            <label class="field-label" for="appleTokenInput">media-user-token</label><input id="appleTokenInput" class="text-input" type="text" autocomplete="off" placeholder="粘贴 Apple 网页版的 media-user-token">
+            <button type="button" class="btn btn-primary btn-block" id="connectAppleToken">读取我的资料库</button>
+            <p class="form-note is-warn" id="appleWriteNote">Apple 只作为来源：真实账号写入需要 Apple 开发者账号，音桥已停用迁入。</p>
+            <details class="help"><summary>如何获取 media-user-token？</summary><ol><li>在浏览器登录 <b>music.apple.com</b>（需要有效的 Apple Music 订阅）；</li><li>按 F12 打开开发者工具，进入 Application / 应用 → Cookies → <code>https://music.apple.com</code>；</li><li>找到 <b>media-user-token</b>，复制它的值粘贴到上方。</li></ol><p>音桥用它读取你的资料库歌单，令牌只存在当前会话内存里；过期后重新复制即可。这条通道来自 Apple 网页版，不是公开接口，可能随时失效。</p></details>
+            <details class="help" id="appleMusicKitBox"><summary>已有 Apple 开发者令牌？改用 MusicKit 授权</summary><div class="apple-auth-box"><button type="button" class="btn btn-outline btn-block" id="appleAuthBtn">通过 Apple Music 授权</button><p class="form-note" id="appleAuthNote">将打开 Apple 授权窗口，完成后自动返回音桥。</p></div></details>
         </div>
         <div id="realNetease" class="real-form is-hidden">
+            <div id="neteaseQrBox" class="netease-qr-box is-hidden">
+                <div class="netease-qr-stage">
+                    <div class="netease-qr-frame"><div class="netease-qr-image" id="neteaseQrImage" role="img" aria-label="网易云登录二维码"></div><span class="netease-qr-loading" id="neteaseQrLoading">正在获取二维码…</span></div>
+                    <div class="netease-qr-side">
+                        <p class="netease-qr-status" id="neteaseQrStatus" role="status">请用网易云音乐 App 扫码确认登录。</p>
+                        <ol class="netease-qr-steps"><li>打开网易云音乐 App 的扫一扫</li><li>扫描左侧二维码</li><li>在手机上确认登录</li></ol>
+                        <p class="netease-qr-alt">手机不在身边？<a href="#" id="neteaseQrLink" target="_blank" rel="noopener noreferrer">在浏览器打开授权链接</a></p>
+                        <button type="button" class="btn btn-outline btn-small" id="neteaseQrRefresh">刷新二维码</button>
+                    </div>
+                </div>
+                <p class="form-note">扫码登录后，音桥只在当前会话内保存网易云登录态，用于创建与写入歌单。</p>
+            </div>
             <p class="netease-explanation" id="neteaseExplanation">真实模式使用服务器运行用户已登录的本机 CLI，并非多用户账号授权。配对码由本机操作员设置，不是平台 Key 或 Secret。</p>
             <p class="form-note" id="neteaseAuthNote" role="status"></p>
             <div id="neteasePairingBox">
@@ -271,7 +286,7 @@
             </div>
             <p class="form-note" id="neteaseCliNote">断开音桥连接不等于退出 CLI；CLI 的账号状态可能保存在服务器本机。</p>
         </div>
-        <p class="security-note"><svg class="icon" aria-hidden="true"><use href="#icon-shield"/></svg>请勿向他人透露凭据或配对码。网易云 CLI 登录状态可能保存在服务器本机，断开音桥连接不会退出 CLI。</p>
+        <p class="security-note"><svg class="icon" aria-hidden="true"><use href="#icon-shield"/></svg>请勿向他人透露凭据、二维码或配对码。网易云登录态只保存在当前会话，断开连接即失效；本机 CLI 的账号状态可能保存在服务器本机，断开音桥连接不会退出 CLI。</p>
         <button type="button" class="text-link danger is-hidden" id="disconnectBtn">断开当前平台连接</button>
     </div>
 </div>

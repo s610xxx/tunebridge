@@ -47,11 +47,20 @@ flowchart LR
     PR --> NP[NeteaseMusicProvider]
     QP --> QC[QqMusicClient]
     AP --> AC[AppleMusicClient]
-    AP --> AT[AppleDeveloperTokenService]
+    AP --> AT[AppleAccessTokenService]
+    AT --> ADV[AppleDeveloperTokenService]
+    AT --> WEB[AppleWebTokenService]
+    WEB --> HB[HttpAppleBundles]
+    HB --> MW[(music.apple.com 网页版)]
     NP --> NC[NeteaseMusicClient]
     QC --> QQ[(QQ 音乐接口)]
     AC --> AM[(Apple Music API)]
     NC --> NE[(本机 ncm-cli)]
+    NP --> NW[NeteaseWebClient]
+    NP --> NQ[NeteaseQrLoginService]
+    NW --> NT[NeteaseTransport]
+    NQ --> NT
+    NT --> NK[(网易云 eapi)]
     MS -. 轮询 .- U
 ```
 
@@ -182,6 +191,8 @@ public interface MusicProvider {
 | GET | `/api/state` | 本会话连接状态 + 服务端能力（Apple 令牌、部署模式、网易云可用性） |
 | GET | `/api/config` | 前端配置：Apple 开发者令牌（可公开）、示例链接 |
 | POST | `/api/connections/{provider}` | 建立连接，body：`{mode:"demo"}` 或 `{mode:"real", cookie? / musicUserToken? / pairingCode?}` |
+| POST | `/api/connections/netease/qr` | 取当前会话的网易云登录二维码，返回 `{loginId, svg, target, expiresInSeconds}`（不含任何凭据） |
+| GET | `/api/connections/netease/qr/{loginId}` | 轮询扫码状态，返回 `{state:"waiting|scanned|expired|connected|failed", message, accountName}`；`connected` 时连接已写入本会话；非本会话的 `loginId` 返回 400 |
 | DELETE | `/api/connections/{provider}` | 断开并清除凭据 |
 | POST | `/api/playlists/preview` | 解析并预览，body：`{provider, url}` |
 | GET | `/api/playlists?provider=QQ_MUSIC` | 列出当前连接账号 own 的来源歌单（`[{id,name,url,coverUrl,trackCount}]`，见 §6.6）；未连接 409 `NOT_CONNECTED`，网易云作为来源 400 `INVALID_INPUT` |
@@ -205,10 +216,21 @@ public interface MusicProvider {
     "QQ_MUSIC": { "connected": true, "mode": "DEMO", "accountName": "演示账号 · 阿桥" },
     "APPLE_MUSIC": { "connected": false }
   },
-  "appleRealReady": false,
-  "demoAvailable": true
+  "providers": [
+    { "id": "QQ_MUSIC", "label": "QQ 音乐", "sampleUrl": "https://y.qq.com/n/ryqq/playlist/7300098051" }
+  ],
+  "config": {
+    "appleRealReady": false,
+    "demoEnabled": true,
+    "defaultStorefront": "cn",
+    "maxTracks": 200,
+    "appleDeveloperToken": "",
+    "neteaseRealReady": false
+  }
 }
 ```
+
+`config.appleRealReady` 表示服务端配好了 Apple 开发者令牌，即「迁入 Apple」可用；为 `false` 时 Apple 仍可作为来源（见 9.1），前端据此禁用 MusicKit 授权按钮并显示只读提示。`appleDeveloperToken` 是可在浏览器公开的开发者令牌，未配置时为空串。
 
 ### 6.3 迁移任务快照
 
@@ -305,9 +327,10 @@ sequenceDiagram
     participant API as 平台 API
     B->>S: POST /api/connections/APPLE_MUSIC {mode:"real", musicUserToken}
     S->>P: connectReal(credentials)
-    P->>API: GET /v1/me/storefront（Bearer dev + Music-User-Token）
+    P->>P: 空白令牌 → 400
+    P->>API: GET /v1/me/storefront（Bearer 开发者令牌或网页版令牌 + Music-User-Token）
     API-->>P: 200 {storefront:"cn"}
-    P-->>S: ProviderConnection
+    P-->>S: ProviderConnection（无开发者令牌时账号名带「仅迁出」）
     S->>S: 写入 HttpSession（内存，凭据不落盘）
     S-->>B: 脱敏连接信息
 ```
@@ -432,17 +455,27 @@ Referer: https://y.qq.com/
 
 ## 9. Apple Music 接入
 
-### 9.1 授权
+### 9.1 访问令牌来源与用户授权
 
-**浏览器 MusicKit JS（推荐）**：
+`AppleAccessTokenService` 只有一个决策点：`AppleDeveloperTokenService.configured()` 为真时用开发者令牌（官方通道，读写皆可），否则用 `AppleWebTokenService` 取到的 Apple 网页播放器自带令牌（只读通道）。`Access(bearer, unofficial)` 里的 `unofficial` 决定 `AppleMusicClient` 是否补 `Origin` 头，`writesAllowed()` 决定能否写 Apple。
 
-1. 服务端配置开发者令牌（静态 `APPLE_DEVELOPER_TOKEN`，或用 `.p8` 现场签发）。
-2. 前端加载 `https://js-cdn.music.apple.com/musickit/v3/musickit.js`。
-3. `MusicKit.configure({ developerToken, app: { name: "TuneBridge", build: "1.0" } })`。
-4. `await music.authorize()` 得到 `musicUserToken`，POST 给后端。
-5. 后端携带 `Music-User-Token` 调用 `/v1/me/storefront` 校验。
+**网页版令牌（默认，无需开发者账号）**：
 
-**手动回退**：用户从 MusicKit 调试工具/其他合法途径获得 Music-User-Token 后粘贴。
+1. `HttpAppleBundles` 以浏览器 UA 请求 `https://music.apple.com/{storefront}`（storefront 取 `tunebridge.apple.default-storefront`，非 2–3 位字母时回退 `us`）。
+2. 从 HTML 里按 `/assets/…*.js` 取前 4 个脚本 URL（去重、保持顺序），逐个下载。
+3. 在脚本文本中匹配 compact JWT，解 base64url payload，只接受 `iss == "AMPWebPlay"` 且 `exp > now + 3600` 的那个。
+4. 命中即缓存，到期前 1 天（`ROTATION_MARGIN_SECONDS`）自动重取；命中的令牌寿命不足 1 天时按 10 分钟缓存重试。
+5. 一个都取不到 → `ProviderException.upstream(...)`（502）提示「网页版可能已改版」，不静默返回空歌单。
+
+请求侧：`api.music.apple.com` + `Authorization: Bearer <网页令牌>` + `Origin: https://music.apple.com`（缺 `Origin` 会被拒），用户身份走 `Music-User-Token` 头。网页播放器令牌只在带 `Origin` 时被接受，所以 `AppleHttp.requestFactory()` 用 `JdkClientHttpRequestFactory`（`java.net.http`）——JDK 的 `HttpURLConnection` 会把 `Origin` 当受限头静默丢掉。QQ / 网易云仍用 `AppConfig` 里的共享工厂，超时同为 6s 连接 / 25s 读取。
+
+**用户凭据**：登录 `music.apple.com` 后从 Cookie 复制 `media-user-token` 粘贴到连接弹窗，服务端只存当前会话内存。
+
+**可选的 MusicKit JS 授权**（需要开发者令牌，签发细节见 9.2）：配置 `APPLE_DEVELOPER_TOKEN`，或 `.p8` 三件套。前端加载 `https://js-cdn.music.apple.com/musickit/v3/musickit.js`，`MusicKit.configure({ developerToken, app })` → `await music.authorize()` 拿 `musicUserToken` 回传后端。开发者令牌可下发浏览器，用户令牌只留服务端。
+
+**只读边界**：`AppleMusicProvider.createPlaylist` / `addTracks` 在非 DEMO 连接且未配置开发者令牌时调用 `requireWritable()` → 503 `NOT_CONFIGURED`，提示改用 QQ / 网易云作为目标。前端连接文案标注「仅迁出」，演示模式不受影响。
+
+`/api/config` 只暴露开发者令牌（Apple 允许 Web 端嵌入）；网页播放器令牌与 `media-user-token` 都只在服务端使用，不下发前端、不入库、不写日志。
 
 ### 9.2 开发者令牌签发（可选）
 
@@ -466,9 +499,12 @@ Referer: https://y.qq.com/
 Headers：
 
 ```
-Authorization: Bearer <developerToken>
-Music-User-Token: <musicUserToken>   // 资料库/写操作必需
+Authorization: Bearer <developerToken 或 网页版令牌（见 9.1）>
+Music-User-Token: <media-user-token>   // 资料库/写操作必需
+Origin: https://music.apple.com        // 仅用网页版令牌时必需，缺失即 401
 ```
+
+`get` / `post` 都先 `requireUserToken`：会话里没有 `media-user-token` 时直接 401「缺少 Apple Music 用户令牌，请重新连接…」，不发请求。上游 401 / 403 统一翻译成 401 `UNAUTHORIZED`，文案分别指向「重新授权 / 重新粘贴令牌」与「确认订阅有效并取最新令牌」。
 
 字段映射：`attributes.name / artistName / albumName / durationInMillis / artwork.url`（替换 `{w}x{h}`）。
 
@@ -505,16 +541,18 @@ GET /v1/catalog/{storefront}/search?term={title artist}&types=songs&limit=5
 
 取 `results.songs.data[]`，映射为候选。请求间隔 120ms，避免触发限流；单次迁移默认上限 200 首。
 
-## 10. 网易云接入（试用 · 仅本机）
+## 10. 网易云接入
 
-网易云没有可用的公开写接口，MVP 用**本机 `ncm-cli` 子进程**打通「QQ 音乐 → 网易云」这一个方向，作为可部署形态之前的试用能力。
+网易云没有公开的写接口，「QQ 音乐 → 网易云」这一个方向有两条并列的真实账号通道，外加仅本机可用的 CLI 通道；三条通道共用同一套 SPI 与编排逻辑。
 
-- **只作目标平台**：`fetchPlaylist()` 直接返回 400「网易云音乐暂不支持作为来源平台」；`MigrationService` 也只放行「来源 QQ → 目标网易云」。
-- **配对码连接**：`POST /api/connections/NETEASE_MUSIC {mode:"real", pairingCode}` → `NeteaseLocalAccess.authorize()` 用 `MessageDigest.isEqual` 定长比对配置里的 `tunebridge.netease.pairing-code`（`[A-Za-z0-9_-]{32,128}`），通过后签发一个随机 grant 存入会话；随后 `client.validateLogin()` 失败即回收 grant。
-- **grant 而非凭据**：会话里保存的是 32 字节随机 grant，网易云登录态由 CLI 自己管理（属本机数据），服务端不接触 Cookie / 密码。断开连接或退出登录即 `revoke(grant)`。
-- **CLI 调用**：`node <cli-entry> search song|playlist create|playlist add|playlist tracks … --output=json`，参数经转义后由 `ProcessBuilder` 启动（丢弃 stderr、超时强制销毁进程），响应逐层校验后翻译成领域模型；每批加歌同样受 200 首上限约束。
-- **本机边界**：配置了配对码才启用 `NeteaseLocalGuard` 过滤器——要求回环地址、`Host` 与本地端口一致、写请求 `Origin` 同源、无转发头、非 `cross-site`，否则 403。`server.address` 非 `127.0.0.1` 或开启转发头处理时启动失败；PUBLIC 模式配置网易云相关键值同样拒绝启动。
-- **目标去重**：`MigrationJob.confirm()` 对网易云目标额外拒绝同一批里重复的曲目，避免 CLI 端产生重复行。
+- **只作目标平台**：`fetchPlaylist()` 与 `listPlaylists()` 直接返回 400「网易云音乐暂不支持作为来源平台」；`MigrationService` 也只放行「来源 QQ → 目标网易云」。
+- **eapi 通道**：`NeteaseEapi` 负责协议细节——请求发往 `https://music.163.com/eapi/...`，但签名里用对应的 `/api/...` 路径（两端点必须成对，否则上游返回「接口未找到」）；参数 JSON 与 `md5("nobody" + apiPath + "use" + paramsJson + "md5forencrypt")` 摘要拼成 `path-36cd479b6b5-params-digest` 后走 AES/ECB/PKCS5 加密、大写十六进制输出为 `params=...`。官方网页端必备的 `os/appver/versioncode/mobilename/buildver/channelId/deviceId/csrf_token` 由 `NeteaseEapi.params()` 统一附带。传输收敛在 `NeteaseTransport` 接缝上，生产走 `HttpNeteaseTransport`，测试注入替身。
+- **扫码登录**：`POST /api/connections/netease/qr` → `NeteaseQrLoginService.start()` 取 `unikey`，把登录链接 `https://music.163.com/login?codekey={unikey}` 交给 `QrCodeSvg`（仅依赖 zxing core，直接输出 SVG 路径，避免引入 AWT 与图片编码）现场渲染；返回体只有 `loginId/svg/target/expiresInSeconds`，`loginId` 是 16 字节随机数的十六进制串。前端每 0.9–1.5 秒轮询 `GET /api/connections/netease/qr/{loginId}`，上游 801/802/800/803 分别翻译成 `waiting/scanned/expired/connected`；二维码 120 秒过期，服务侧还按 `loginId` 做了 900ms 轮询节流，避免前端把上游打爆。
+- **会话绑定与凭据去向**：`loginId` 与签发中的 `unikey` 只存在 `NeteaseQrLoginService` 的内存表里，并以发起请求的 HTTP 会话 ID 校验，别的会话拿不到也轮不动；803 后从 `Set-Cookie` 里只挑 `MUSIC_U/MUSIC_T/NMTID/__csrf/MUSIC_A_T`，拼成 Cookie 交给 `ConnectionService.connect(..., mode="real", {cookie})`，凭据随后只留在服务端会话内存的 `ProviderConnection` 中，既不进响应体也不入库；过期、失败或确认成功都会立刻 retire 掉这条 pending 记录。
+- **写入通道**：`NeteaseWebClient` 用同一份 Cookie 依次完成 `cloudsearch` 搜索、`playlist/create` 建单、`playlist/manipulate/tracks` 分批加歌（每批 20 首、单次上限 200 首），最后回读 `v6/playlist/detail` 校验曲目确实落库；回读不完整时抛「写入结果未确认」而不是假装成功，业务码非 200 时提示可能触发风控。
+- **CLI 配对连接（仅本机）**：`POST /api/connections/NETEASE_MUSIC {mode:"real", pairingCode}` → `NeteaseLocalAccess.authorize()` 用 `MessageDigest.isEqual` 定长比对配置里的 `tunebridge.netease.pairing-code`（`[A-Za-z0-9_-]{32,128}`），通过后签发一个随机 grant 存入会话；随后 `client.validateLogin()` 失败即回收 grant。会话里保存的是 grant 而非凭据，网易云登录态由 CLI 自己管理（属本机数据），断开连接或退出登录即 `revoke(grant)`。CLI 调用形式为 `node <cli-entry> search song|playlist create|playlist add|playlist tracks … --output=json`，参数经转义后由 `ProcessBuilder` 启动（丢弃 stderr、超时强制销毁进程）。连接时若同时给了 Cookie 与配对码，Cookie 优先。
+- **本机边界**：配置了配对码才启用 `NeteaseLocalGuard` 过滤器——要求回环地址、`Host` 与本地端口一致、写请求 `Origin` 同源、无转发头、非 `cross-site`，否则 403。`server.address` 非 `127.0.0.1` 或开启转发头处理时启动失败；PUBLIC 模式配置网易云 CLI 相关键值同样拒绝启动，此时真实账号只能走扫码登录。
+- **目标去重**：`MigrationJob.confirm()` 对网易云目标额外拒绝同一批里重复的曲目，避免平台端产生重复行。
 
 ## 11. 歌曲匹配算法
 
@@ -539,7 +577,7 @@ score = 0.55 * titleSimilarity + 0.35 * artistSimilarity + 0.10 * albumBonus
 - 演示适配器执行与真实链路相同的匹配、创建、写入流程，只是不发外部请求。
 - 迁移报告中的目标链接为 `demo://playlist/{id}`，前端识别后打开「演示音乐库」。
 - 演示连接与演示库绑定音桥账号的浏览器会话：退出登录或会话销毁即清除，迁移报告仍存入该账号的历史。
-- 网易云只在 LOCAL 部署提供演示模式（本机配对与 CLI 登录态属本机数据），PUBLIC 配置直接拒绝启动。
+- 网易云演示模式与其他平台一致：连接后写入本会话的演示音乐库；真实账号在 LOCAL 与 PUBLIC 都可以扫码登录，只有本机 CLI 配对限定 LOCAL。
 
 ## 13. 安全设计
 
@@ -576,7 +614,7 @@ score = 0.55 * titleSimilarity + 0.35 * artistSimilarity + 0.10 * albumBonus
 | SSRF | 不请求用户传入的任意 URL；先用正则解析出平台 ID，再调用固定域名 |
 | 输入 | 链接严格正则；歌单名去控制符后限长 60；单次曲目上限 200；分页参数 `0 ≤ offset ≤ 100000`、`1 ≤ limit ≤ 50` |
 | 写操作 | 只创建新歌单，不修改/删除用户已有歌单；不写入「我喜欢」 |
-| 本机能力 | 网易云走本机 `ncm-cli` 子进程，仅 LOCAL + 配对码，PUBLIC 配置该项直接拒绝启动 |
+| 本机能力 | 网易云 `ncm-cli` 子进程配对仅 LOCAL，PUBLIC 配置该项直接拒绝启动；扫码登录走服务端出站的 eapi 请求，与 QQ / Apple 同级，不开放任何本机能力 |
 | 传输 | PUBLIC 模式强制**应用原生 TLS**（`server.ssl.enabled=true`），`forward-headers-strategy` 必须为 `none`，不支持反向代理 |
 
 `BoundaryFilter` 与 `DeploymentPolicy` 的完整边界规则见 §14.1；两者都在启动时校验配置，不合规直接拒绝启动。
@@ -616,13 +654,13 @@ tunebridge:
     mode: ${TUNEBRIDGE_SECURITY_MODE:local}
     public-origin: ${TUNEBRIDGE_PUBLIC_ORIGIN:}
     registration-code: ${TUNEBRIDGE_REGISTRATION_CODE:}
-  apple:
+  apple:              # 全部可留空：留空即「仅迁出」，读取走网页版令牌；配置后才允许迁入 Apple
     developer-token: ${APPLE_DEVELOPER_TOKEN:}
     team-id: ${APPLE_TEAM_ID:}
     key-id: ${APPLE_KEY_ID:}
     private-key-path: ${APPLE_PRIVATE_KEY_PATH:}
     default-storefront: ${APPLE_STOREFRONT:cn}
-  netease:            # 仅 LOCAL 模式可用
+  netease:            # 本机 CLI 配对，仅 LOCAL 模式可用；扫码登录无需任何配置
     pairing-code: ${NETEASE_PAIRING_CODE:}
     node-executable: ${NETEASE_NODE_EXECUTABLE:}
     cli-entry: ${NETEASE_CLI_ENTRY:}
@@ -665,11 +703,11 @@ tunebridge:
 | 状态不允许（重复确认/放弃） | 409 | `MIGRATION_STATE` | 任务已不属于当前会话，或不在等待确认状态 |
 | 会话内连接与任务快照不一致 | 409 | `TARGET_CHANGED` | 目标平台连接已变化，请重新匹配 |
 | 只读历史 | 409 | `HISTORY_READ_ONLY` | 历史任务只读，不会重新执行写入 |
-| Cookie 缺 uin/票据、配对码错误、Apple 401 | 401 | `UNAUTHORIZED` | 授权已失效，请重新连接 |
-| 未配置 Apple 令牌 / 网易云本机模式 | 503 | `NOT_CONFIGURED` | 服务端未配置，请先使用演示模式 |
+| Cookie 缺 uin/票据、配对码错误、Apple `media-user-token` 过期（401/403） | 401 | `UNAUTHORIZED` | 授权已失效，请重新连接 |
+| 迁入 Apple 但未配置开发者令牌 / 网易云本机模式 | 503 | `NOT_CONFIGURED` | 服务端未配置，请先使用演示模式 |
 | 链接非法、JSON 无法解析、分页越界、曲目 ID 非整数 | 400 | `INVALID_INPUT` / `INVALID_JSON` | 无法识别歌单链接 / 请检查输入 |
 | 任务不存在或不属于本账号 | 404 | `NOT_FOUND` | 迁移任务不存在 |
-| 平台业务码拒绝写入 | 502 | `UPSTREAM_ERROR` | 平台拒绝了本次写入，请使用演示模式或稍后重试 |
+| 平台业务码拒绝写入、取不到 Apple 网页版访问令牌 | 502 | `UPSTREAM_ERROR` | 平台拒绝了本次请求，请使用演示模式或稍后重试 |
 | 上游超时 | 504 | （适配器翻译） | 平台响应超时，请稍后重试 |
 | 未捕获异常 | 500 | `INTERNAL_ERROR` | 服务暂时不可用，请稍后重试 |
 
@@ -677,18 +715,22 @@ tunebridge:
 
 ## 16. 测试计划
 
-共 **101 项 JUnit 测试 + 26 项 Node 测试**，`mvn test` 全绿。所有触达数据库的测试都固定 `spring.datasource.url=jdbc:h2:mem:<name>;DB_CLOSE_DELAY=-1`，不写本地 `./data/`。
+共 **131 项 JUnit 测试 + 26 项 Node 测试**，`mvn test` 全绿。所有触达数据库的测试都固定 `spring.datasource.url=jdbc:h2:mem:<name>;DB_CLOSE_DELAY=-1`，不写本地 `./data/`。
 
 ### 16.1 单元与适配器测试
 
 - `QqUrlParserTest` / `AppleUrlParserTest`：多种链接形式、地区与查询参数、非法输入。
 - `QqCookieTest`：`g_tk` 计算、uin 前缀剥离、票据优先级。
 - `TrackMatcherTest`：完全相同、Live 版本、多歌手、完全不同、空值、归一化。
-- `NeteaseLocalAccessTest` / `NeteaseMusicClientTest` / `NeteaseMusicProviderTest`：配对码校验与 grant 生命周期、CLI 参数与响应解析、只作目标平台。
+- `NeteaseLocalAccessTest` / `NeteaseMusicClientTest` / `NeteaseMusicProviderTest`：配对码校验与 grant 生命周期、CLI 参数与响应解析、只作目标平台，以及扫码 Cookie 连接全程走网页端通道、空白 Cookie 回落配对码。
+- `NeteaseWebClientTest`：eapi 请求路径与加密表单体格式、`unikey` 缺失时报错、803 只保留登录相关 Cookie、无登录态时拒绝报出账号名、上游异常翻译成「稍后重试」，以及签名使用 `/api` 路径而请求发往 `/eapi`。
+- `NeteaseQrLoginServiceTest`：二维码按会话复用与 SVG 渲染、跨会话轮询被拒、确认后写连接并 retire、过期只报一次、轮询节流不会打爆上游。
 - `AuthRateLimiterTest`：注入时钟验证按来源窗口、全局限流与来源数量上限。
 - `ConnectionServiceTest`：退出即清除凭据。
 - `QqPlaylistListTest`：`fcg_user_created_diss` 响应解析（`vec_diss[]` 的 id / 标题 / 曲目数 / 封面、缺失字段兜底、跳过空 `disstid`）、业务码与结构异常时的降级提示、`limit` 边界。
 - `ApplePlaylistListTest`：只保留 `p.` 资料库歌单、`attributes.url` 缺失时按 storefront 拼链接、无曲目数落 0、空数据与超限截断。
+- `AppleWebTokenServiceTest`：只认 `iss == AMPWebPlay` 的 compact JWT、跳过寿命不足的令牌、脚本抓取顺序与上限、令牌缓存与到期前轮换、网页改版取不到时报可读的 502、畸形 JWT 不炸。
+- `AppleMusicProviderTest`：连接必须带 `media-user-token` 且标注「仅迁出」、读取用用户令牌调资料库接口、写入 Apple 在未配置开发者令牌时返回 503 且不发请求、已配置时放行、演示模式不受写入闸门影响。
 - `DemoPlaylistsTest`：内置歌单在前、本会话演示库歌单随后，`demo://library/<id>` 链接与曲目数可直接作为来源。
 
 ### 16.2 安全与持久化测试（MockMvc）
@@ -699,6 +741,7 @@ tunebridge:
 - `MigrationHistoryApiTest`：历史只归本账号、他人 404、同账号其他会话只读、历史确认/放弃 409、会话结束后 INTERRUPTED、分页参数越界 400、`GET /api/migrations` 带筛选跨账号不泄漏、筛选值无法映射到平台或状态时 400。
 - `StaticResourceAccessTest`：扫描 `index.html` 里引用的每个本地 `js`/`css` 资源，逐一以未登录请求断言 200，防止新增静态文件漏进 `SecurityConfiguration.STATIC_PATHS` 而被 `denyAll()` 拦成 403。
 - `SourcePlaylistListApiTest`：`GET /api/playlists` 的演示列表（含会话内新建歌单）、未连接 409 `NOT_CONNECTED`、网易云与 Spotify 作为来源 400、缺参数 400、跨会话互不可见、未登录 401。
+- `NeteaseQrLoginApiTest`：`POST /api/connections/netease/qr` 返回内联 SVG、`loginId` 与授权链接且响应体不含凭据，`GET /api/connections/netease/qr/{loginId}` 逐级回报扫码进度、确认后回报账号名且仍不回传 Cookie，其他会话轮询同一 `loginId` 返回 400 `INVALID_INPUT`。
 - `DemoMigrationFlowTest`：注册登录 + CSRF 下的双向演示迁移、匹配与确认分离、未连接 409、非法链接 400、任务会话隔离，以及备份读取（含 250 首大歌单）与「本地备份 → 已连接平台」的恢复闭环（`source.provider = LOCAL_BACKUP`、无需来源平台连接）。
 - `testsupport/BridgeRequests`：统一构造满足 LOCAL 边界的 MockMvc 请求（回环 `Host`、`X-Forwarded-*` 置空、CSRF 走请求头）。
 
@@ -707,13 +750,13 @@ tunebridge:
 - `node --test src/test/js/playlist-backup.test.js src/test/js/history-report.test.js src/test/js/playlist-batch.test.js`：CSV/JSON 备份的解析、转义、公式前缀防护与坏数据拒绝；历史导出的摘要列顺序、逐首匹配表、报告 JSON 结构、本地时间注入与输入校验；批量队列的链接解析与拒绝原因、去重与 10 份上限、状态流转与「最终结果不可改写」、可移除 / 可重新排队的行、批次统计与小结 CSV。
 - Chrome / Edge / Safari 桌面端 + 375px 移动端；核心流程 ≤ 5 步、无控制台错误。
 - 端到端手工验证：注册 → 连接演示账号 → 粘贴链接 → 匹配 → 勾选确认 → 报告 → 迁移历史；在历史弹窗里按平台/状态/时间筛选（含筛选后为空、重置）、导出摘要 CSV 与逐份报告的 CSV/JSON；批量迁移区读取来源歌单并勾选入队、粘贴多行链接（重复与非链接行被拒）、逐份「迁移下一份 → 确认」、跳过一份后服务端预览被释放且队列可继续、失败项重新排队、导出批次小结、队列非空时换方向被拒；停服重启后历史仍在、未确认预览显示「任务已中断」、写入阶段中断显示「结果待核查」，第二个账号看到 0 条历史且无法读取他人任务。
-- 真实 QQ 公开歌单读取（联网）与未配置 Apple 令牌时的降级提示。
+- 真实 QQ 公开歌单读取（联网）；真实 Apple 凭 `media-user-token` 联网读取资料库歌单，并确认迁入 Apple 在未配置开发者令牌时被拒。
 
 ## 17. 已知限制与后续演进
 
 1. QQ 真实写入依赖网页登录 Cookie，票据约 3 天过期；后续接入官方开放平台 / 扫码登录。
 2. QQ 写接口存在风控与签名通道要求，MVP 采用「如实失败 + 演示兜底」。
-3. Apple 真实链路需要开发者账号与订阅；评审演示以演示模式为主。
+3. Apple 读取依赖网页版非官方通道（见 9.1），Apple 改版即可能失效；真实账号不能迁入 Apple（需开发者账号），评审演示以演示模式为主。
 4. 历史只读、绝不自动重试：写入阶段中断的任务需要人工去目标平台核查后重新迁移；重复迁移会产生新歌单。
 5. 会话与活动任务在内存里，服务重启后只能从库里恢复报告，无法恢复未完成的连接；H2 单文件、单实例，多实例需共享会话 + PostgreSQL（P2）。
 6. 一个账号同时只允许一个未结束任务、全局最多 16 个活动任务，队列仍是内存态；后续改为消息队列并支持取消/重试。
@@ -723,7 +766,8 @@ tunebridge:
 10. 备份恢复一次只处理 `max-tracks`（默认 200）首，超出的曲目需要分次提交；恢复出的新歌单与原备份不保证曲目顺序一一对应，因为写入的是目标平台匹配到的曲目。
 11. 历史导出在前端完成，一次最多 500 行（按 `limit ≤ 50` 分批拉取），超出部分需要先用时间窗口分段再导；筛选的纯日期边界按 UTC 自然日解释，跨时区用户在同一天边界上可能与本地日历有一天之差（导出的时间列本身用浏览器本地时区渲染）。
 12. 批量队列只存在于当前浏览器页面：刷新、关闭标签页或退出登录都会清空队列（已生成的报告仍在迁移历史），换设备需要重新粘贴链接；单次上限 10 份，逐份确认因此无法压缩。跳过一份会调用 `abandon` 释放服务端预览，该份会以「任务已中断」进入历史，这是有意的留痕而不是脏数据。
-13. 来源歌单列表只覆盖「账号自己创建 / 资料库内」的歌单：QQ 取 `vec_diss`（上限 50，不含收藏的他人歌单），Apple 资料库接口不返回曲目数（列表显示「曲目数未知」）；平台不提供列表能力时前端退回「粘贴多条链接」。
+13. 来源歌单列表只覆盖「账号自己创建 / 资料库内」的歌单：QQ 取 `vec_diss`（上限 50，不含收藏的他人歌单），Apple 走 `/v1/me/library/playlists`（只返回资料库歌单，链接是 `p.` 形式的直链而非可分享的 `pl.` 链接；曲目数该接口不返回，列表显示「曲目数未知」）；平台不提供列表能力时前端退回「粘贴多条链接」。
+14. Apple 只作来源：读取走 Apple 网页版自身的访问令牌 + 用户粘贴的 `media-user-token`（见 9.1），写入需要 Apple 开发者账号签发的令牌，未配置时返回 503 并提示改用其他平台作为目标。
 
 ## 18. 目录结构
 

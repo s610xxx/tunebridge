@@ -15,6 +15,7 @@ import com.tunebridge.provider.ProviderRegistry;
 import com.tunebridge.provider.apple.AppleDeveloperTokenService;
 import com.tunebridge.provider.demo.DemoStore;
 import com.tunebridge.provider.netease.NeteaseLocalAccess;
+import com.tunebridge.provider.netease.NeteaseQrLoginService;
 import com.tunebridge.service.ConnectionService;
 import com.tunebridge.service.MigrationService;
 import com.tunebridge.service.MigrationHistory;
@@ -54,11 +55,12 @@ public class ApiController {
     private final TuneBridgeProperties properties;
     private final AppleDeveloperTokenService appleTokenService;
     private final NeteaseLocalAccess neteaseLocalAccess;
+    private final NeteaseQrLoginService neteaseQrLogin;
 
     public ApiController(ProviderRegistry providerRegistry, ConnectionService connectionService,
                          MigrationService migrationService, DemoStore demoStore,
                          TuneBridgeProperties properties, AppleDeveloperTokenService appleTokenService,
-                         NeteaseLocalAccess neteaseLocalAccess) {
+                         NeteaseLocalAccess neteaseLocalAccess, NeteaseQrLoginService neteaseQrLogin) {
         this.providerRegistry = providerRegistry;
         this.connectionService = connectionService;
         this.migrationService = migrationService;
@@ -66,6 +68,7 @@ public class ApiController {
         this.properties = properties;
         this.appleTokenService = appleTokenService;
         this.neteaseLocalAccess = neteaseLocalAccess;
+        this.neteaseQrLogin = neteaseQrLogin;
     }
 
     @GetMapping("/state")
@@ -120,6 +123,7 @@ public class ApiController {
         } else if (providerId == ProviderId.APPLE_MUSIC) {
             credentials.put("musicUserToken", request.musicUserToken());
         } else if (providerId == ProviderId.NETEASE_MUSIC) {
+            credentials.put("cookie", request.cookie());
             credentials.put("pairingCode", request.pairingCode());
         }
         ProviderConnection connection = connectionService.connect(session, providerId, request.mode(), credentials);
@@ -130,6 +134,17 @@ public class ApiController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void disconnect(@PathVariable("provider") String providerValue, HttpSession session) {
         connectionService.disconnect(session, ProviderId.from(providerValue));
+    }
+
+    @PostMapping("/connections/netease/qr")
+    public NeteaseQrLoginService.StartView neteaseQrStart(HttpSession session) {
+        return neteaseQrLogin.start(session);
+    }
+
+    @GetMapping("/connections/netease/qr/{loginId}")
+    public NeteaseQrLoginService.PollView neteaseQrPoll(@PathVariable("loginId") String loginId,
+                                                         HttpSession session) {
+        return neteaseQrLogin.poll(session, loginId);
     }
 
     @GetMapping("/playlists")

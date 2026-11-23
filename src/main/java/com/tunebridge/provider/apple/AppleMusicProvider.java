@@ -24,13 +24,16 @@ public class AppleMusicProvider implements MusicProvider {
     private static final int SOURCE_LIST_LIMIT = 50;
 
     private final AppleMusicClient client;
+    private final AppleAccessTokenService tokens;
     private final DemoCatalog demoCatalog;
     private final DemoStore demoStore;
     private final TuneBridgeProperties properties;
 
-    public AppleMusicProvider(AppleMusicClient client, DemoCatalog demoCatalog,
-                              DemoStore demoStore, TuneBridgeProperties properties) {
+    public AppleMusicProvider(AppleMusicClient client, AppleAccessTokenService tokens,
+                              DemoCatalog demoCatalog, DemoStore demoStore,
+                              TuneBridgeProperties properties) {
         this.client = client;
+        this.tokens = tokens;
         this.demoCatalog = demoCatalog;
         this.demoStore = demoStore;
         this.properties = properties;
@@ -43,7 +46,7 @@ public class AppleMusicProvider implements MusicProvider {
 
     @Override
     public String sampleUrl() {
-        return "https://music.apple.com/us/playlist/a-list-pop/pl.5ee8333dbe944d9f9151e97d92b35eaa";
+        return "https://music.apple.com/cn/playlist/jason-mraz-essentials/pl.77d8b27b5ca1442e8378920504f115d1";
     }
 
     @Override
@@ -56,11 +59,11 @@ public class AppleMusicProvider implements MusicProvider {
     public ProviderConnection connectReal(Map<String, String> credentials) {
         String userToken = credentials.get("musicUserToken");
         if (userToken == null || userToken.isBlank()) {
-            throw ProviderException.badRequest("请提供 Apple Music 的 Music-User-Token");
+            throw ProviderException.badRequest("请粘贴 Apple Music 网页版的 media-user-token");
         }
         String storefront = client.validate(userToken.trim());
         return new ProviderConnection(ProviderId.APPLE_MUSIC, ConnectionMode.REAL,
-                "Apple Music · " + storefront.toUpperCase(Locale.ROOT),
+                "Apple Music · " + storefront.toUpperCase(Locale.ROOT) + (tokens.writesAllowed() ? "" : "（仅迁出）"),
                 Map.of("musicUserToken", userToken.trim(), "storefront", storefront));
     }
 
@@ -116,6 +119,7 @@ public class AppleMusicProvider implements MusicProvider {
             Playlist playlist = demoStore.create(sessionId(connection), ProviderId.APPLE_MUSIC, name, description);
             return CreatedPlaylist.of(playlist.id(), playlist.name(), playlist.webUrl(), 0);
         }
+        requireWritable();
         return client.createPlaylist(connection.credential("musicUserToken"),
                 connection.credential("storefront"), name, description);
     }
@@ -129,7 +133,17 @@ public class AppleMusicProvider implements MusicProvider {
             demoStore.addTracks(sessionId(connection), ProviderId.APPLE_MUSIC, playlist.id(), tracks);
             return;
         }
+        requireWritable();
         client.addTracks(connection.credential("musicUserToken"), playlist, tracks);
+    }
+
+    /** 迁入 Apple 要用开发者账号签发的令牌；非官方网页通道只放开读取。 */
+    private void requireWritable() {
+        if (!tokens.writesAllowed()) {
+            throw ProviderException.notConfigured(
+                    "音桥已停用「迁入 Apple Music」：真实账号写入需要 Apple 开发者账号。"
+                            + "请把 QQ 音乐或网易云音乐作为目标平台，或用「备份歌单」导出 Apple 歌单");
+        }
     }
 
     private Playlist fetchDemoPlaylist(ProviderConnection connection, String url) {

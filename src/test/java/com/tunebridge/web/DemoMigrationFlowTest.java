@@ -185,7 +185,7 @@ class DemoMigrationFlowTest {
         when(registry.get(ProviderId.QQ_MUSIC)).thenReturn(provider);
         when(connections.get(session, ProviderId.QQ_MUSIC)).thenReturn(connection);
         when(provider.fetchPlaylist(connection, "demo://large")).thenReturn(playlist);
-        ApiController controller = new ApiController(registry, connections, null, null, properties, null, null);
+        ApiController controller = new ApiController(registry, connections, null, null, properties, null, null, null);
         var mockMvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new ApiExceptionHandler()).build();
         String request = objectMapper.writeValueAsString(Map.of("provider", "QQ_MUSIC", "url", " demo://large "));

@@ -29,6 +29,7 @@
     let confirmationState = 'idle';
     let jobStatusError = false;
     let connectProvider = null;
+    let neteaseQr = { loginId: null, deadline: 0, token: 0, timer: null };
     let libraryProvider = 'QQ_MUSIC';
     let lastFocused = null;
     let stateLoaded = false;
@@ -70,7 +71,9 @@
             'connectDemoBtn', 'realQQ', 'qqCookie', 'connectQQReal', 'realApple', 'appleAuthBtn',
             'realNetease', 'neteasePairingCode', 'neteaseAuthNote', 'connectNeteaseReal',
             'neteaseExplanation', 'neteasePairingBox', 'neteaseCliNote', 'connectDivider',
-            'appleAuthNote', 'appleTokenInput', 'connectAppleToken', 'disconnectBtn', 'progressModal',
+            'neteaseQrBox', 'neteaseQrImage', 'neteaseQrLoading', 'neteaseQrStatus',
+            'neteaseQrLink', 'neteaseQrRefresh',
+            'appleAuthNote', 'appleTokenInput', 'connectAppleToken', 'appleWriteNote', 'disconnectBtn', 'progressModal',
             'progressView', 'resultView', 'progressTitle', 'progressStep', 'progressFill',
             'progressPercent', 'statMatched', 'statUnmatched', 'statTotal', 'liveLog', 'progressError',
             'libraryModal', 'libraryTitle', 'libraryTabs', 'libraryList', 'jobPill', 'jobPillText',
@@ -532,6 +535,7 @@
         }
         if (wasOpen && modal === els.connectModal) {
             clearSensitiveInputs();
+            stopNeteaseQr();
         }
         if (wasOpen && modal === els.authModal) clearAuthSecrets();
         if (wasOpen && modal === els.historyModal) historySeq++;
@@ -1073,10 +1077,8 @@
         els.connectSubtitle.textContent = provider === 'QQ_MUSIC'
                 ? '公开歌单可直接读取；连接后可创建并写入歌单'
                 : provider === 'APPLE_MUSIC'
-                    ? '授权后，新歌单会写入你的 iCloud 音乐资料库'
-                    : neteaseLocalCli
-                        ? '仅作为 QQ 音乐的目标；真实模式使用服务器本机 CLI'
-                        : '仅作为 QQ 音乐的目标；公网部署只提供演示授权';
+                    ? '粘贴 Apple 网页版的 media-user-token，读取你的资料库歌单'
+                    : '仅作为 QQ 音乐的目标；用网易云 App 扫码授权真实账号';
         const iconSource = document.querySelector(`[data-provider-card="${provider}"] .provider-icon`);
         els.connectIcon.className = `provider-icon large ${PROVIDERS[provider].dot}`;
         els.connectIcon.innerHTML = iconSource ? iconSource.innerHTML : '';
@@ -1092,11 +1094,14 @@
             els.connectNeteaseReal.disabled = !ready;
             els.neteasePairingCode.disabled = !ready;
             els.neteaseAuthNote.textContent = neteaseLocalCli
-                    ? (ready ? '服务器已启用本机 CLI，请输入本机操作员设置的配对码。'
-                        : '服务器尚未启用本机 CLI，无法连接真实网易云；可使用演示授权。')
-                    : '公开多用户服务不提供真实网易云本机 CLI，避免共享服务器上的平台账号；可使用演示授权。';
+                    ? (ready ? '服务器已启用本机 CLI，可扫码登录或输入本机操作员设置的配对码。'
+                        : '服务器尚未启用本机 CLI，请使用扫码登录。')
+                    : '';
+            startNeteaseQrLogin();
+        } else {
+            stopNeteaseQr();
         }
-        els.connectDivider.classList.toggle('is-hidden', provider === 'NETEASE_MUSIC' && !neteaseLocalCli);
+        els.connectDivider.classList.remove('is-hidden');
         els.disconnectBtn.classList.toggle('is-hidden', !connection(provider).connected);
         els.disconnectBtn.textContent = `断开 ${providerLabel(provider)} 连接`;
         if (provider === 'APPLE_MUSIC') {
@@ -1108,9 +1113,10 @@
     function refreshAppleNote() {
         const ready = state.config.appleRealReady === true;
         els.appleAuthBtn.disabled = !ready;
+        els.appleWriteNote.classList.toggle('is-hidden', ready);
         els.appleAuthNote.textContent = ready
                 ? '将打开 Apple 授权窗口，完成后自动返回音桥。'
-                : '服务端尚未配置 Apple 开发者令牌，暂时无法完成真实授权；请先使用演示模式。';
+                : 'MusicKit 授权需要服务端配置 Apple 开发者令牌；未配置时用上方粘贴的 media-user-token 读取资料库。';
     }
 
     async function connectDemo(provider) {
@@ -1186,11 +1192,88 @@
         }
     }
 
+    function stopNeteaseQr() {
+        neteaseQr.token += 1;
+        if (neteaseQr.timer) window.clearTimeout(neteaseQr.timer);
+        neteaseQr.timer = null;
+        neteaseQr.loginId = null;
+    }
+
+    function neteaseQrNote(message, live) {
+        els.neteaseQrStatus.textContent = message;
+        els.neteaseQrStatus.classList.toggle('is-live', live === true);
+    }
+
+    async function startNeteaseQrLogin() {
+        if (!requireLogin()) return;
+        const generation = authGeneration;
+        stopNeteaseQr();
+        const token = neteaseQr.token;
+        els.neteaseQrBox.classList.remove('is-hidden');
+        els.neteaseQrLoading.classList.remove('is-hidden');
+        els.neteaseQrImage.innerHTML = '';
+        els.neteaseQrLink.href = '#';
+        els.neteaseQrRefresh.disabled = true;
+        neteaseQrNote('正在获取二维码…', true);
+        try {
+            const view = await api('/api/connections/netease/qr', { method: 'POST' });
+            if (token !== neteaseQr.token || generation !== authGeneration) return;
+            neteaseQr.loginId = view.loginId;
+            neteaseQr.deadline = Date.now() + Math.max(1, view.expiresInSeconds || 1) * 1000;
+            els.neteaseQrLoading.classList.add('is-hidden');
+            els.neteaseQrImage.innerHTML = view.svg || '';
+            els.neteaseQrLink.href = view.target || '#';
+            els.neteaseQrRefresh.disabled = false;
+            neteaseQrTick(token, generation, 1200);
+        } catch (error) {
+            if (token !== neteaseQr.token || generation !== authGeneration) return;
+            els.neteaseQrLoading.classList.add('is-hidden');
+            els.neteaseQrRefresh.disabled = false;
+            neteaseQrNote(error.message || '二维码获取失败，请点击刷新二维码重试', false);
+        }
+    }
+
+    function neteaseQrTick(token, generation, delay) {
+        neteaseQr.timer = window.setTimeout(async () => {
+            neteaseQr.timer = null;
+            if (token !== neteaseQr.token || generation !== authGeneration || !neteaseQr.loginId) return;
+            if (Date.now() >= neteaseQr.deadline) {
+                neteaseQrNote('二维码已过期，请点击刷新二维码重新获取', false);
+                return;
+            }
+            let view;
+            try {
+                view = await api(`/api/connections/netease/qr/${encodeURIComponent(neteaseQr.loginId)}`);
+            } catch (error) {
+                if (token !== neteaseQr.token || generation !== authGeneration) return;
+                neteaseQrNote(error.message || '登录状态查询失败，请点击刷新二维码重试', false);
+                return;
+            }
+            if (token !== neteaseQr.token || generation !== authGeneration) return;
+            if (view.state === 'connected') {
+                neteaseQr.loginId = null;
+                closeModal(els.connectModal);
+                await refreshState();
+                if (generation !== authGeneration) return;
+                toast(`网易云音乐已连接${view.accountName ? '：' + view.accountName : ''}`, 'success');
+                return;
+            }
+            if (view.state === 'expired' || view.state === 'failed') {
+                neteaseQr.loginId = null;
+                neteaseQrNote(view.message || '登录未完成，请刷新二维码重试', false);
+                return;
+            }
+            const remaining = Math.max(0, Math.ceil((neteaseQr.deadline - Date.now()) / 1000));
+            neteaseQrNote(`${view.message || '等待扫码'} · 剩余 ${remaining} 秒`, true);
+            neteaseQrTick(token, generation, view.state === 'scanned' ? 900 : 1500);
+        }, delay);
+    }
+
     async function connectRealApple(token) {
         if (!requireLogin()) return;
         const generation = authGeneration;
         if (!token) {
-            toast('请先输入 Music-User-Token', 'error');
+            toast('请先粘贴 Apple 网页版的 media-user-token', 'error');
             return;
         }
         try {
@@ -2857,6 +2940,7 @@
 
         els.connectQQReal.addEventListener('click', connectRealQq);
         els.connectNeteaseReal.addEventListener('click', connectRealNetease);
+        els.neteaseQrRefresh.addEventListener('click', startNeteaseQrLogin);
         els.connectAppleToken.addEventListener('click', () => connectRealApple(els.appleTokenInput.value.trim()));
 
         els.appleAuthBtn.addEventListener('click', async () => {

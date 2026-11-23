@@ -18,7 +18,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
@@ -30,19 +29,20 @@ public class AppleMusicClient {
 
     private static final Logger log = LoggerFactory.getLogger(AppleMusicClient.class);
     private static final String API_BASE = "https://api.music.apple.com";
+    private static final String WEB_PLAYER_ORIGIN = "https://music.apple.com";
     private static final String USER_AGENT = "TuneBridge/1.0";
     private static final int PAGE_SIZE = 100;
 
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
-    private final AppleDeveloperTokenService tokenService;
+    private final AppleAccessTokenService tokens;
     private final TuneBridgeProperties properties;
 
-    public AppleMusicClient(ClientHttpRequestFactory requestFactory, ObjectMapper objectMapper,
-                            AppleDeveloperTokenService tokenService, TuneBridgeProperties properties) {
-        this.restClient = RestClient.builder().requestFactory(requestFactory).build();
+    public AppleMusicClient(ObjectMapper objectMapper, AppleAccessTokenService tokens,
+                            TuneBridgeProperties properties) {
+        this.restClient = RestClient.builder().requestFactory(AppleHttp.requestFactory()).build();
         this.objectMapper = objectMapper;
-        this.tokenService = tokenService;
+        this.tokens = tokens;
         this.properties = properties;
     }
 
@@ -245,15 +245,13 @@ public class AppleMusicClient {
             builder.queryParam(entry.getKey(), entry.getValue());
         }
         String uri = builder.build().encode().toUriString();
+        AppleAccessTokenService.Access access = tokens.access();
         try {
-            RestClient.RequestHeadersSpec<?> spec = restClient.get()
+            JsonNode response = restClient.get()
                     .uri(uri)
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + tokenService.token())
-                    .header(HttpHeaders.USER_AGENT, USER_AGENT);
-            if (userToken != null && !userToken.isBlank()) {
-                spec = spec.header("Music-User-Token", userToken);
-            }
-            JsonNode response = spec.retrieve().body(JsonNode.class);
+                    .headers(headers -> authorize(headers, access, userToken))
+                    .retrieve()
+                    .body(JsonNode.class);
             if (response == null) {
                 throw ProviderException.upstream("Apple Music 返回了空响应");
             }
@@ -267,14 +265,13 @@ public class AppleMusicClient {
 
     private JsonNode post(String path, String body, String userToken) {
         requireUserToken(userToken);
+        AppleAccessTokenService.Access access = tokens.access();
         String uri = UriComponentsBuilder.fromUriString(API_BASE).path(path).build().encode().toUriString();
         try {
             return restClient.post()
                     .uri(uri)
                     .contentType(MediaType.APPLICATION_JSON)
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + tokenService.token())
-                    .header(HttpHeaders.USER_AGENT, USER_AGENT)
-                    .header("Music-User-Token", userToken)
+                    .headers(headers -> authorize(headers, access, userToken))
                     .body(body)
                     .retrieve()
                     .body(JsonNode.class);
@@ -285,14 +282,28 @@ public class AppleMusicClient {
         }
     }
 
+    private static void authorize(HttpHeaders headers, AppleAccessTokenService.Access access, String userToken) {
+        headers.setBearerAuth(access.bearer());
+        headers.set(HttpHeaders.USER_AGENT, USER_AGENT);
+        if (access.unofficial()) {
+            // 网页播放器令牌只在同时带上站点来源时才被接受。
+            headers.set("Origin", WEB_PLAYER_ORIGIN);
+        }
+        if (userToken != null && !userToken.isBlank()) {
+            headers.set("Music-User-Token", userToken);
+        }
+    }
+
     private ProviderException mapHttpError(RestClientResponseException ex) {
         int status = ex.getStatusCode().value();
         String detail = errorDetail(ex);
         if (status == 401) {
-            return ProviderException.unauthorized("Apple Music 授权已过期或无效，请重新授权" + detail);
+            return ProviderException.unauthorized("Apple Music 不接受这次授权，请重新授权或重新粘贴 media-user-token"
+                    + detail);
         }
         if (status == 403) {
-            return ProviderException.unauthorized("Apple Music 拒绝访问，请确认账号已开通 Apple Music 订阅" + detail);
+            return ProviderException.unauthorized("Apple Music 拒绝访问：请确认账号已开通订阅，"
+                    + "并粘贴网页版最新的 media-user-token" + detail);
         }
         if (status == 404) {
             return ProviderException.notFound("Apple Music 歌单不存在或不可访问");
@@ -342,7 +353,7 @@ public class AppleMusicClient {
 
     private static void requireUserToken(String userToken) {
         if (userToken == null || userToken.isBlank()) {
-            throw ProviderException.unauthorized("Apple Music 授权已失效，请重新连接");
+            throw ProviderException.unauthorized("缺少 Apple Music 用户令牌，请重新连接并粘贴最新的 media-user-token");
         }
     }
 
