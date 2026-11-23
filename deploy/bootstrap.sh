@@ -204,8 +204,8 @@ PrivateTmp=yes
 ProtectSystem=full
 ProtectHome=yes
 ReadWritePaths=/opt/tunebridge/data
-CapabilityBoundingSet=
-AmbientCapabilities=
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 UMask=0027
 
 [Install]
