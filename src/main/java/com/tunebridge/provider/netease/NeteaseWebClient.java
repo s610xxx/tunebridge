@@ -24,6 +24,8 @@ public class NeteaseWebClient {
     private static final String BASE = "https://music.163.com";
     private static final int MAX_TRACKS = 200;
     private static final int BATCH_SIZE = 20;
+    /** 风控降级时搜索会以"HTTP 200 + 空 songs"回来，与真的搜不到同形；先退避确认一次再定性。 */
+    private static final long[] EMPTY_RETRY_DELAY_MS = {5000};
     private static final String UNVERIFIED = "网易云歌单写入结果未确认，请到网易云客户端核对后再决定是否重试";
 
     private final NeteaseTransport transport;
@@ -93,23 +95,48 @@ public class NeteaseWebClient {
             return List.of();
         }
         int capped = Math.max(1, Math.min(30, limit));
+        for (int attempt = 0; ; attempt++) {
+            JsonNode body = searchOnce(cookie, keyword, capped);
+            JsonNode songs = body.path("result").path("songs");
+            if (!songs.isArray()) {
+                throw ProviderException.upstream("网易云搜索响应格式无效（" + describeRejection(body) + "）");
+            }
+            if (!songs.isEmpty()) {
+                return toTracks(songs, capped, keyword);
+            }
+            if (attempt < EMPTY_RETRY_DELAY_MS.length) {
+                log.info("网易云搜索《{}》返回空结果（{}），{} 毫秒后重试", keyword, describeRejection(body),
+                        EMPTY_RETRY_DELAY_MS[attempt]);
+                sleep(EMPTY_RETRY_DELAY_MS[attempt]);
+                continue;
+            }
+            String code = businessCode(body);
+            if (!code.isBlank() && !"200".equals(code)) {
+                throw ProviderException.upstream("网易云搜索被限流：空结果（业务码 " + code + "）");
+            }
+            return List.of();
+        }
+    }
+
+    private JsonNode searchOnce(String cookie, String keyword, int capped) {
         Map<String, Object> params = params(cookie);
         params.put("s", keyword);
         params.put("type", 1);
         params.put("limit", capped);
         params.put("offset", 0);
         params.put("total", "false");
-        JsonNode body = post("/api/cloudsearch/pc", params, cookie).json();
-        JsonNode songs = body.path("result").path("songs");
-        if (!songs.isArray()) {
-            throw ProviderException.upstream("网易云搜索响应格式无效（" + describeRejection(body) + "）");
-        }
+        return post("/api/cloudsearch/pc", params, cookie).json();
+    }
+
+    private List<Track> toTracks(JsonNode songs, int capped, String keyword) {
         List<Track> found = new ArrayList<>();
         int dropped = 0;
         for (JsonNode song : songs) {
             if (found.isEmpty() && shapeSampled.compareAndSet(false, true)) {
                 // 只做一次结构采样：候选字段名决定了歌手/专辑能否解析，猜错会让所有匹配都卡在"标题一致"。
-                log.info("网易云 cloudsearch 首条候选：{}", truncate(song.toString()));
+                List<String> keys = new ArrayList<>();
+                song.fieldNames().forEachRemaining(keys::add);
+                log.info("网易云 cloudsearch 候选字段：{}", String.join("/", keys));
             }
             if (isUnplayable(song)) {
                 dropped++;
@@ -321,8 +348,13 @@ public class NeteaseWebClient {
         return MissingNode.getInstance();
     }
 
-    private static String truncate(String json) {
-        return json.length() > 900 ? json.substring(0, 900) + "…" : json;
+    private static void sleep(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw ProviderException.upstream("网易云搜索重试被中断");
+        }
     }
 
     private static String text(JsonNode node, String field) {
@@ -330,10 +362,15 @@ public class NeteaseWebClient {
         return value == null || value.isNull() || value.isMissingNode() ? "" : String.valueOf(value.asText(""));
     }
 
+    private static String businessCode(JsonNode body) {
+        JsonNode header = body.path("header");
+        return firstNonBlank(text(header, "code"), text(body, "code"));
+    }
+
     /** 网易云把拒因放在 header.code/msg，顶层 code/msg 只是兜底；风控命中时这是唯一的线索，不能吞掉。 */
     private static String describeRejection(JsonNode body) {
         JsonNode header = body.path("header");
-        String code = firstNonBlank(text(header, "code"), text(body, "code"));
+        String code = businessCode(body);
         String message = firstNonBlank(text(header, "msg"), text(body, "msg"));
         if (code.isBlank() && message.isBlank()) {
             List<String> names = new ArrayList<>();

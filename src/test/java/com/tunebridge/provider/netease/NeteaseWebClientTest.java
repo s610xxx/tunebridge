@@ -119,6 +119,32 @@ class NeteaseWebClientTest {
     }
 
     @Test
+    void retriesAnEmptySearchOnceAndUsesTheResultThatFollows() {
+        recorder.queued.add(new NeteaseTransport.Response(200,
+                "{\"result\":{\"songs\":[]},\"header\":{\"code\":\"405\",\"msg\":\"操作频繁，请稍候再试\"}}", List.of()));
+        recorder.queued.add(new NeteaseTransport.Response(200,
+                "{\"result\":{\"songs\":[{\"id\":\"8\",\"name\":\"泡沫\",\"ar\":[{\"name\":\"G.E.M.邓紫棋\"}]}]}}",
+                List.of()));
+
+        assertThat(client.searchTracks("MUSIC_U=t", "泡沫", "G.E.M.", 6))
+                .extracting(Track::providerTrackId).containsExactly("8");
+        assertThat(recorder.queued).isEmpty();
+    }
+
+    @Test
+    void callsAThrottledEmptySearchThrottledInsteadOfNoMatch() {
+        recorder.queued.add(new NeteaseTransport.Response(200,
+                "{\"result\":{\"songs\":[]},\"header\":{\"code\":\"405\",\"msg\":\"操作频繁，请稍候再试\"}}", List.of()));
+        recorder.queued.add(new NeteaseTransport.Response(200,
+                "{\"result\":{\"songs\":[]},\"header\":{\"code\":\"405\",\"msg\":\"操作频繁，请稍候再试\"}}", List.of()));
+
+        assertThatThrownBy(() -> client.searchTracks("MUSIC_U=t", "泡沫", "G.E.M.", 6))
+                .isInstanceOf(ProviderException.class)
+                .hasMessageContaining("被限流")
+                .hasMessageContaining("405");
+    }
+
+    @Test
     void readsTheCsrfTokenThatWriteEndpointsRequire() {
         assertThat(NeteaseWebClient.csrfToken("MUSIC_U=t; __csrf=ab12; NMTID=x")).isEqualTo("ab12");
         assertThat(NeteaseWebClient.csrfToken("MUSIC_U=t")).isEmpty();
@@ -149,6 +175,7 @@ class NeteaseWebClientTest {
         private String url;
         private String body;
         private String cookie;
+        private final java.util.Deque<NeteaseTransport.Response> queued = new java.util.ArrayDeque<>();
         private NeteaseTransport.Response reply = new NeteaseTransport.Response(200, "{}", List.of());
         private RuntimeException failure;
 
@@ -160,7 +187,7 @@ class NeteaseWebClientTest {
             if (failure != null) {
                 throw failure;
             }
-            return reply;
+            return queued.isEmpty() ? reply : queued.poll();
         }
     }
 }
