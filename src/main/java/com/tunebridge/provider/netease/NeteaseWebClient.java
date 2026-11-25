@@ -24,7 +24,7 @@ public class NeteaseWebClient {
     private static final String BASE = "https://music.163.com";
     private static final int MAX_TRACKS = 200;
     private static final int BATCH_SIZE = 20;
-    /** 限流既可能返回非 200 业务码，也可能返回空 songs 数组，两者都与"真没有这首歌"同形，退避确认后再定性。 */
+    /** 405 的限流窗口是分钟级，值得退避重等两次；干净的空结果不是限流，不该为它白等。 */
     private static final long[] DEFAULT_SEARCH_RETRY_DELAYS = {8000, 25000};
     private static final String UNVERIFIED = "网易云歌单写入结果未确认，请到网易云客户端核对后再决定是否重试";
 
@@ -99,27 +99,26 @@ public class NeteaseWebClient {
         for (int attempt = 0; ; attempt++) {
             JsonNode body = searchOnce(cookie, keyword, capped);
             JsonNode songs = body.path("result").path("songs");
-            String code = businessCode(body);
-            boolean throttled = "405".equals(code);
-            if (!code.isBlank() && !"200".equals(code) && !throttled) {
-                throw ProviderException.upstream("网易云搜索失败（" + describeRejection(body) + "）");
-            }
-            if (!throttled && songs.isArray() && !songs.isEmpty()) {
+            if (songs.isArray() && !songs.isEmpty()) {
                 return toTracks(songs, capped, keyword);
             }
-            if (throttled || songs.isEmpty()) {
+            String code = businessCode(body);
+            if ("405".equals(code)) {
                 if (attempt < searchRetryDelays.length) {
-                    log.info("网易云搜索《{}》未拿到候选（{}），{} 毫秒后重试", keyword, describeRejection(body),
+                    log.info("网易云搜索《{}》被限流（{}），{} 毫秒后重试", keyword, describeRejection(body),
                             searchRetryDelays[attempt]);
                     sleep(searchRetryDelays[attempt]);
                     continue;
                 }
-                if (throttled) {
-                    throw ProviderException.rateLimited("网易云搜索被限流：请稍后重试（" + describeRejection(body) + "）");
-                }
-                return List.of();
+                throw ProviderException.rateLimited("网易云搜索被限流：请稍后重试（" + describeRejection(body) + "）");
             }
-            throw ProviderException.upstream("网易云搜索响应格式无效（" + describeRejection(body) + "）");
+            if (!code.isBlank() && !"200".equals(code)) {
+                throw ProviderException.upstream("网易云搜索失败（" + describeRejection(body) + "）");
+            }
+            if (!songs.isArray()) {
+                throw ProviderException.upstream("网易云搜索响应格式无效（" + describeRejection(body) + "）");
+            }
+            return List.of();
         }
     }
 
