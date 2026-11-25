@@ -252,27 +252,12 @@ public class MigrationService {
 
             job.step("正在匹配歌曲", 15);
             int total = sourceTracks.size();
-            int searchFailures = 0;
-            ProviderException lastSearchError = null;
             boolean realUpstream = isReal(targetConnection);
 
             for (int i = 0; i < total; i++) {
                 Track sourceTrack = sourceTracks.get(i);
-                List<Track> candidates;
-                try {
-                    candidates = targetProvider.searchTracks(targetConnection,
-                            sourceTrack.title(), sourceTrack.artist(), 6);
-                } catch (ProviderException ex) {
-                    if (ex.status() == HttpStatus.UNAUTHORIZED
-                            || ex.status() == HttpStatus.SERVICE_UNAVAILABLE
-                            || ex.status() == HttpStatus.TOO_MANY_REQUESTS) {
-                        throw ex;
-                    }
-                    searchFailures++;
-                    lastSearchError = ex;
-                    job.log("搜索《" + sourceTrack.title() + "》失败：" + ex.getMessage(), "WARN");
-                    candidates = List.of();
-                }
+                List<Track> candidates = targetProvider.searchTracks(targetConnection,
+                        sourceTrack.title(), sourceTrack.artist(), 6);
 
                 TrackMatcher.Evaluation evaluation = trackMatcher.evaluate(sourceTrack, candidates);
                 if (evaluation.matched()) {
@@ -293,9 +278,6 @@ public class MigrationService {
             }
 
             if (job.matchesSnapshot().stream().noneMatch(TrackMatch::matched)) {
-                if (searchFailures == total && lastSearchError != null) {
-                    throw lastSearchError;
-                }
                 throw ProviderException.upstream("没有匹配到任何歌曲，已取消创建空歌单");
             }
 

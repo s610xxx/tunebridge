@@ -9,6 +9,7 @@ import com.tunebridge.provider.ProviderException;
 import com.tunebridge.provider.netease.NeteaseWebClient.QrStatus;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 
 class NeteaseWebClientTest {
 
@@ -142,7 +143,24 @@ class NeteaseWebClientTest {
         assertThatThrownBy(() -> client.searchTracks("MUSIC_U=t", "泡沫", "G.E.M.", 6))
                 .isInstanceOf(ProviderException.class)
                 .hasMessageContaining("被限流")
-                .hasMessageContaining("405");
+                .hasMessageContaining("405")
+                .satisfies(error -> assertThat(((ProviderException) error).status())
+                        .isEqualTo(HttpStatus.TOO_MANY_REQUESTS));
+    }
+
+    @Test
+    void doesNotRetryOrMislabelOtherBusinessErrorsAsThrottling() {
+        client.searchRetryDelays = new long[]{0, 0};
+        recorder.queued.add(new NeteaseTransport.Response(200,
+                "{\"header\":{\"code\":\"403\",\"msg\":\"illegal request!\"}}", List.of()));
+        recorder.queued.add(new NeteaseTransport.Response(200,
+                "{\"result\":{\"songs\":[]}}", List.of()));
+
+        assertThatThrownBy(() -> client.searchTracks("MUSIC_U=t", "泡沫", "G.E.M.", 6))
+                .isInstanceOf(ProviderException.class)
+                .hasMessageContaining("403")
+                .hasMessageContaining("illegal request!");
+        assertThat(recorder.queued).hasSize(1);
     }
 
     @Test

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -528,6 +529,55 @@ class DemoMigrationFlowTest {
             assertThat(changed.error()).contains("目标连接已断开或更换");
             verify(target, times(1)).createPlaylist(eq(targetConnection), anyString(), anyString());
             verify(target, times(1)).addTracks(targetConnection, created, List.of(firstTarget, secondTarget));
+        }
+    }
+
+    @Test
+    void stopsMatchingOnTargetErrorsInsteadOfOfferingAnIncompletePreview() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        MusicProvider source = mock(MusicProvider.class);
+        MusicProvider target = mock(MusicProvider.class);
+        ProviderRegistry registry = mock(ProviderRegistry.class);
+        ConnectionService connections = mock(ConnectionService.class);
+        MigrationHistory history = mock(MigrationHistory.class);
+        ProviderConnection targetConnection = new ProviderConnection(ProviderId.NETEASE_MUSIC,
+                ConnectionMode.DEMO, "demo", Map.of());
+        Playlist playlist = new Playlist("id", "name", "description", "cover", "owner", "url", List.of(
+                Track.of("source-0", "Song A", "Artist", "Album", 180),
+                Track.of("source-1", "Song B", "Artist", "Album", 180),
+                Track.of("source-2", "Song C", "Artist", "Album", 180)));
+        when(registry.get(ProviderId.QQ_MUSIC)).thenReturn(source);
+        when(registry.get(ProviderId.NETEASE_MUSIC)).thenReturn(target);
+        when(connections.require(session, ProviderId.NETEASE_MUSIC)).thenReturn(targetConnection);
+        when(source.fetchPlaylist(null, "source-url")).thenReturn(playlist);
+        when(target.searchTracks(targetConnection, "Song A", "Artist", 6))
+                .thenReturn(List.of(Track.of("target-0", "Song A", "Artist", "Album", 180)));
+        when(target.searchTracks(targetConnection, "Song B", "Artist", 6))
+                .thenThrow(ProviderException.rateLimited("网易云搜索被限流：请稍后重试（业务码 405）"));
+
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            MigrationService service = new MigrationService(registry, connections, new TrackMatcher(),
+                    new TuneBridgeProperties(), executor, history);
+            MigrationJob job = service.createJob(session, ownerId, ProviderId.QQ_MUSIC, "source-url",
+                    ProviderId.NETEASE_MUSIC, "name");
+            executor.submit(() -> { }).get(10, TimeUnit.SECONDS);
+
+            assertThat(job.status()).isEqualTo(JobStatus.FAILED);
+            assertThat(job.error()).contains("限流").contains("405");
+            assertThat(job.matchesSnapshot()).hasSize(1);
+            verify(target, never()).searchTracks(targetConnection, "Song C", "Artist", 6);
+            verify(target, never()).createPlaylist(any(), anyString(), anyString());
+            assertThatThrownBy(() -> service.confirmJob(session, ownerId, job.id(), List.of(0)))
+                    .isInstanceOf(ProviderException.class).hasMessageContaining("等待确认");
+
+            doThrow(ProviderException.upstream("网易云搜索失败（业务码 403）"))
+                    .when(target).searchTracks(targetConnection, "Song B", "Artist", 6);
+            MigrationJob rejected = service.createJob(session, ownerId, ProviderId.QQ_MUSIC, "source-url",
+                    ProviderId.NETEASE_MUSIC, "name");
+            executor.submit(() -> { }).get(10, TimeUnit.SECONDS);
+            assertThat(rejected.status()).isEqualTo(JobStatus.FAILED);
+            assertThat(rejected.error()).contains("403");
+            verify(target, never()).createPlaylist(any(), anyString(), anyString());
         }
     }
 
