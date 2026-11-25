@@ -79,6 +79,24 @@ class NeteaseWebClientTest {
     }
 
     @Test
+    void readsTheCsrfTokenThatWriteEndpointsRequire() {
+        assertThat(NeteaseWebClient.csrfToken("MUSIC_U=t; __csrf=ab12; NMTID=x")).isEqualTo("ab12");
+        assertThat(NeteaseWebClient.csrfToken("MUSIC_U=t")).isEmpty();
+        assertThat(NeteaseWebClient.csrfToken(null)).isEmpty();
+    }
+
+    @Test
+    void pointsAtTheMissingCsrfCookieWhenPlaylistCreateIsRejected() {
+        recorder.reply = new NeteaseTransport.Response(200,
+                "{\"code\":403,\"header\":{\"code\":\"403\",\"msg\":\"illegal request!\"}}", List.of());
+
+        assertThatThrownBy(() -> client.createPlaylist("MUSIC_U=t", "新歌单"))
+                .isInstanceOf(ProviderException.class)
+                .hasMessageContaining("业务码 403：illegal request!")
+                .hasMessageContaining("缺少 __csrf");
+    }
+
+    @Test
     void signsTheApiPathEvenThoughTheRequestUsesTheEapiChannel() {
         String body = NeteaseEapi.formBody("/api/nuser/account/get", NeteaseEapi.params());
 

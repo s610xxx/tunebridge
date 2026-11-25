@@ -29,6 +29,26 @@ public class NeteaseWebClient {
         this.objectMapper = objectMapper;
     }
 
+    /** 官方网页端参数集；写操作的 csrf_token 必须取自已登录 Cookie 的 __csrf，留空会被判为 illegal request。 */
+    private static Map<String, Object> params(String cookie) {
+        Map<String, Object> params = NeteaseEapi.params();
+        params.put("csrf_token", csrfToken(cookie));
+        return params;
+    }
+
+    static String csrfToken(String cookie) {
+        if (cookie == null) {
+            return "";
+        }
+        for (String part : cookie.split(";")) {
+            String pair = part.trim();
+            if (pair.startsWith("__csrf=")) {
+                return pair.substring("__csrf=".length());
+            }
+        }
+        return "";
+    }
+
     public QrKeyResult requestQrKey() {
         Map<String, Object> params = NeteaseEapi.params();
         params.put("code", "100");
@@ -52,7 +72,7 @@ public class NeteaseWebClient {
     }
 
     public String accountName(String cookie) {
-        JsonNode body = post("/api/nuser/account/get", NeteaseEapi.params(), cookie).json();
+        JsonNode body = post("/api/nuser/account/get", params(cookie), cookie).json();
         JsonNode account = body.path("account");
         if (account.isMissingNode() || account.isNull()) {
             throw ProviderException.unauthorized("网易云登录态无效，请重新扫码");
@@ -67,7 +87,7 @@ public class NeteaseWebClient {
             return List.of();
         }
         int capped = Math.max(1, Math.min(30, limit));
-        Map<String, Object> params = NeteaseEapi.params();
+        Map<String, Object> params = params(cookie);
         params.put("s", keyword);
         params.put("type", 1);
         params.put("limit", capped);
@@ -104,13 +124,14 @@ public class NeteaseWebClient {
     }
 
     public CreatedPlaylist createPlaylist(String cookie, String name) {
-        Map<String, Object> params = NeteaseEapi.params();
+        Map<String, Object> params = params(cookie);
         params.put("name", name);
         params.put("privacy", "0");
         JsonNode body = post("/api/playlist/create", params, cookie).json();
         String id = firstNonBlank(text(body, "id"), text(body.path("playlist"), "id"), text(body.path("data"), "id"));
         if (id.isBlank()) {
-            throw ProviderException.upstream("网易云未返回新歌单 ID（" + describeRejection(body) + "）");
+            String csrfHint = csrfToken(cookie).isBlank() ? "，Cookie 中缺少 __csrf" : "";
+            throw ProviderException.upstream("网易云未返回新歌单 ID（" + describeRejection(body) + csrfHint + "）");
         }
         String returnedName = firstNonBlank(text(body.path("playlist"), "name"), name);
         return new CreatedPlaylist(id, returnedName, BASE + "/#/playlist?id=" + id, 0, Map.of());
@@ -151,7 +172,7 @@ public class NeteaseWebClient {
         } catch (com.fasterxml.jackson.core.JsonProcessingException ex) {
             throw ProviderException.badRequest("网易云歌曲列表无法序列化");
         }
-        Map<String, Object> params = NeteaseEapi.params();
+        Map<String, Object> params = params(cookie);
         params.put("op", "add");
         params.put("pid", playlistId);
         params.put("trackIds", trackIds);
