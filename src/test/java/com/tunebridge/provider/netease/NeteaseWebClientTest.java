@@ -146,6 +146,41 @@ class NeteaseWebClientTest {
                 .hasMessageContaining("405")
                 .satisfies(error -> assertThat(((ProviderException) error).status())
                         .isEqualTo(HttpStatus.TOO_MANY_REQUESTS));
+        assertThat(recorder.posts).isEqualTo(3);
+    }
+
+    @Test
+    void keepsUsableCandidatesEvenWhenTheHeaderCodeIsNot200() {
+        client.searchRetryDelays = new long[]{0, 0};
+        recorder.reply = new NeteaseTransport.Response(200, """
+                {"header":{"code":"300","msg":"部分接口受限"},
+                 "result":{"songs":[{"id":"12","name":"海阔天空","ar":[{"name":"G.E.M.邓紫棋"}]}]}}""", List.of());
+
+        assertThat(client.searchTracks("MUSIC_U=t", "海阔天空", "G.E.M.", 6))
+                .extracting(Track::providerTrackId).containsExactly("12");
+        assertThat(recorder.posts).isEqualTo(1);
+    }
+
+    @Test
+    void reportsAMissingSongsArrayAsABrokenContractInsteadOfAMiss() {
+        client.searchRetryDelays = new long[]{0, 0};
+        recorder.reply = new NeteaseTransport.Response(200, "{\"result\":{\"hasMore\":false}}", List.of());
+
+        assertThatThrownBy(() -> client.searchTracks("MUSIC_U=t", "泡沫", "G.E.M.", 6))
+                .isInstanceOf(ProviderException.class)
+                .hasMessageContaining("响应格式无效")
+                .hasMessageContaining("无业务码");
+        assertThat(recorder.posts).isEqualTo(1);
+    }
+
+    @Test
+    void treatsEmptyArrayUnderCode200AsAGenuineMissWithoutBackoff() {
+        client.searchRetryDelays = new long[]{0, 0};
+        recorder.reply = new NeteaseTransport.Response(200,
+                "{\"code\":200,\"result\":{\"songs\":[]}}", List.of());
+
+        assertThat(client.searchTracks("MUSIC_U=t", "某首没有的歌", "无名", 6)).isEmpty();
+        assertThat(recorder.posts).isEqualTo(1);
     }
 
     @Test
@@ -194,6 +229,7 @@ class NeteaseWebClientTest {
         private String url;
         private String body;
         private String cookie;
+        private int posts;
         private final java.util.Deque<NeteaseTransport.Response> queued = new java.util.ArrayDeque<>();
         private NeteaseTransport.Response reply = new NeteaseTransport.Response(200, "{}", List.of());
         private RuntimeException failure;
@@ -203,6 +239,7 @@ class NeteaseWebClientTest {
             this.url = requestUrl;
             this.body = formBody;
             this.cookie = cookieHeader;
+            this.posts++;
             if (failure != null) {
                 throw failure;
             }
