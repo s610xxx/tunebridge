@@ -543,13 +543,13 @@ GET /v1/catalog/{storefront}/search?term={title artist}&types=songs&limit=5
 
 ## 10. 网易云接入
 
-网易云没有公开的写接口，「QQ 音乐 → 网易云」这一个方向有两条并列的真实账号通道，外加仅本机可用的 CLI 通道；三条通道共用同一套 SPI 与编排逻辑。
+「QQ 音乐 → 网易云」当前使用各用户 Cookie 的 eapi 通道：扫码登录与手工 Cookie 连接共用同一套搜索和写入逻辑；LOCAL 模式另可使用本机 CLI 配对。网易云官方 OpenAPI 是另一套接口与 ID 体系，当前实现没有接入。
 
 - **只作目标平台**：`fetchPlaylist()` 与 `listPlaylists()` 直接返回 400「网易云音乐暂不支持作为来源平台」；`MigrationService` 也只放行「来源 QQ → 目标网易云」。
 - **eapi 通道**：`NeteaseEapi` 负责协议细节——请求发往 `https://music.163.com/eapi/...`，但签名里用对应的 `/api/...` 路径（两端点必须成对，否则上游返回「接口未找到」）；参数 JSON 与 `md5("nobody" + apiPath + "use" + paramsJson + "md5forencrypt")` 摘要拼成 `path-36cd479b6b5-params-digest` 后走 AES/ECB/PKCS5 加密、大写十六进制输出为 `params=...`。官方网页端必备的 `os/appver/versioncode/mobilename/buildver/channelId/deviceId/csrf_token` 由 `NeteaseEapi.params()` 统一附带。传输收敛在 `NeteaseTransport` 接缝上，生产走 `HttpNeteaseTransport`，测试注入替身。
 - **扫码登录**：`POST /api/connections/netease/qr` → `NeteaseQrLoginService.start()` 取 `unikey`，把登录链接 `https://music.163.com/login?codekey={unikey}` 交给 `QrCodeSvg`（仅依赖 zxing core，直接输出 SVG 路径，避免引入 AWT 与图片编码）现场渲染；返回体只有 `loginId/svg/target/expiresInSeconds`，`loginId` 是 16 字节随机数的十六进制串。前端每 0.9–1.5 秒轮询 `GET /api/connections/netease/qr/{loginId}`，上游 801/802/800/803 分别翻译成 `waiting/scanned/expired/connected`；二维码 120 秒过期，服务侧还按 `loginId` 做了 900ms 轮询节流，避免前端把上游打爆。
 - **会话绑定与凭据去向**：`loginId` 与签发中的 `unikey` 只存在 `NeteaseQrLoginService` 的内存表里，并以发起请求的 HTTP 会话 ID 校验，别的会话拿不到也轮不动；803 后从 `Set-Cookie` 里只挑 `MUSIC_U/MUSIC_T/NMTID/__csrf/MUSIC_A_T`，拼成 Cookie 交给 `ConnectionService.connect(..., mode="real", {cookie})`，凭据随后只留在服务端会话内存的 `ProviderConnection` 中，既不进响应体也不入库；过期、失败或确认成功都会立刻 retire 掉这条 pending 记录。
-- **写入通道**：`NeteaseWebClient` 用同一份 Cookie 依次完成 `cloudsearch` 搜索、`playlist/create` 建单、`playlist/manipulate/tracks` 分批加歌（每批 20 首、单次上限 200 首），最后回读 `v6/playlist/detail` 校验曲目确实落库；回读不完整时抛「写入结果未确认」而不是假装成功，业务码非 200 时提示可能触发风控。`NeteaseEapi.params()` 的 `csrf_token` 是占位空值，写操作前由 `NeteaseWebClient.params(cookie)` 用 Cookie 里的 `__csrf` 覆盖——读取类接口不校验它，留空时建单会被判 `403 illegal request`。
+- **写入通道**：`NeteaseWebClient` 用同一份 Cookie 依次完成 `cloudsearch` 搜索、`playlist/create` 建单、`playlist/manipulate/tracks` 分批加歌（每批 20 首、单次上限 200 首），最后回读 `v6/playlist/detail` 校验曲目确实落库；回读不完整时抛「写入结果未确认」。搜索业务码 405 退避后仍失败时按限流结束任务，其他业务错误直接报出上游原因；写入业务码非 200 时提示可能触发风控。`NeteaseEapi.params()` 的 `csrf_token` 是占位空值，写操作前由 `NeteaseWebClient.params(cookie)` 用 Cookie 里的 `__csrf` 覆盖——读取类接口不校验它，留空时建单会被判 `403 illegal request`。
 - **CLI 配对连接（仅本机）**：`POST /api/connections/NETEASE_MUSIC {mode:"real", pairingCode}` → `NeteaseLocalAccess.authorize()` 用 `MessageDigest.isEqual` 定长比对配置里的 `tunebridge.netease.pairing-code`（`[A-Za-z0-9_-]{32,128}`），通过后签发一个随机 grant 存入会话；随后 `client.validateLogin()` 失败即回收 grant。会话里保存的是 grant 而非凭据，网易云登录态由 CLI 自己管理（属本机数据），断开连接或退出登录即 `revoke(grant)`。CLI 调用形式为 `node <cli-entry> search song|playlist create|playlist add|playlist tracks … --output=json`，参数经转义后由 `ProcessBuilder` 启动（丢弃 stderr、超时强制销毁进程）。连接时若同时给了 Cookie 与配对码，Cookie 优先。
 - **本机边界**：配置了配对码才启用 `NeteaseLocalGuard` 过滤器——要求回环地址、`Host` 与本地端口一致、写请求 `Origin` 同源、无转发头、非 `cross-site`，否则 403。`server.address` 非 `127.0.0.1` 或开启转发头处理时启动失败；PUBLIC 模式配置网易云 CLI 相关键值同样拒绝启动，此时真实账号只能走扫码登录。
 - **目标去重**：`MigrationJob.confirm()` 对网易云目标额外拒绝同一批里重复的曲目，避免平台端产生重复行。
@@ -568,6 +568,7 @@ score = 0.55 * titleSimilarity + 0.35 * artistSimilarity + 0.10 * albumBonus
 - **版本提示**：标题包含 Live/Remix/Acoustic 且目标不含时，降低 0.08 并在报告中提示。
 
 匹配结果全部保留，用户能看到「为什么匹配到这首」。
+目标平台搜索报错会终止本次匹配；只有搜索成功但没有合适候选时才记为「未匹配」，避免把限流或接口故障计入匹配率并生成缺歌的确认页。
 
 ## 12. 演示模式
 

@@ -99,20 +99,23 @@ public class NeteaseWebClient {
         for (int attempt = 0; ; attempt++) {
             JsonNode body = searchOnce(cookie, keyword, capped);
             JsonNode songs = body.path("result").path("songs");
-            if (songs.isArray() && !songs.isEmpty()) {
+            String code = businessCode(body);
+            boolean throttled = "405".equals(code);
+            if (!code.isBlank() && !"200".equals(code) && !throttled) {
+                throw ProviderException.upstream("网易云搜索失败（" + describeRejection(body) + "）");
+            }
+            if (!throttled && songs.isArray() && !songs.isEmpty()) {
                 return toTracks(songs, capped, keyword);
             }
-            String code = businessCode(body);
-            boolean rejected = !code.isBlank() && !"200".equals(code);
-            if (rejected || songs.isEmpty()) {
+            if (throttled || songs.isEmpty()) {
                 if (attempt < searchRetryDelays.length) {
                     log.info("网易云搜索《{}》未拿到候选（{}），{} 毫秒后重试", keyword, describeRejection(body),
                             searchRetryDelays[attempt]);
                     sleep(searchRetryDelays[attempt]);
                     continue;
                 }
-                if (rejected) {
-                    throw ProviderException.upstream("网易云搜索被限流：请稍后重试（" + describeRejection(body) + "）");
+                if (throttled) {
+                    throw ProviderException.rateLimited("网易云搜索被限流：请稍后重试（" + describeRejection(body) + "）");
                 }
                 return List.of();
             }
