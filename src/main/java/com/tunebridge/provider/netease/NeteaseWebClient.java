@@ -2,6 +2,7 @@ package com.tunebridge.provider.netease;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.MissingNode;
 import com.tunebridge.domain.CreatedPlaylist;
 import com.tunebridge.domain.Track;
 import com.tunebridge.provider.ProviderException;
@@ -10,12 +11,16 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 
 /** 网易云 eapi 网页端调用：扫码登录、账号校验、搜索与歌单写入。凭据只在参数与返回值之间流动，不落日志。 */
 @Component
 public class NeteaseWebClient {
+    private static final Logger log = LoggerFactory.getLogger(NeteaseWebClient.class);
     private static final String BASE = "https://music.163.com";
     private static final int MAX_TRACKS = 200;
     private static final int BATCH_SIZE = 20;
@@ -23,6 +28,7 @@ public class NeteaseWebClient {
 
     private final NeteaseTransport transport;
     private final ObjectMapper objectMapper;
+    private final AtomicBoolean shapeSampled = new AtomicBoolean();
 
     public NeteaseWebClient(NeteaseTransport transport, ObjectMapper objectMapper) {
         this.transport = transport;
@@ -99,8 +105,14 @@ public class NeteaseWebClient {
             throw ProviderException.upstream("网易云搜索响应格式无效（" + describeRejection(body) + "）");
         }
         List<Track> found = new ArrayList<>();
+        int dropped = 0;
         for (JsonNode song : songs) {
+            if (found.isEmpty() && shapeSampled.compareAndSet(false, true)) {
+                // 只做一次结构采样：候选字段名决定了歌手/专辑能否解析，猜错会让所有匹配都卡在"标题一致"。
+                log.info("网易云 cloudsearch 首条候选：{}", truncate(song.toString()));
+            }
             if (isUnplayable(song)) {
+                dropped++;
                 continue;
             }
             String id = text(song, "id");
@@ -108,20 +120,16 @@ public class NeteaseWebClient {
             if (id.isBlank() || name.isBlank()) {
                 continue;
             }
-            List<String> artists = new ArrayList<>();
-            for (JsonNode item : song.path("artists")) {
-                String value = text(item, "name");
-                if (!value.isBlank()) {
-                    artists.add(value);
-                }
-            }
-            String album = text(song.path("album"), "name");
-            int seconds = (int) Math.max(0, song.path("duration").asLong(0) / 1000);
-            String artwork = text(song, "arturl");
-            found.add(new Track(id, name, String.join(" / ", artists), album, seconds, artwork, 0));
+            String album = text(firstObject(song, "album", "al"), "name");
+            int seconds = (int) Math.max(0, firstNumber(song, "duration", "dt").asLong(0) / 1000);
+            String artwork = firstNonBlank(text(song, "arturl"), text(firstObject(song, "album", "al"), "picUrl"));
+            found.add(new Track(id, name, String.join(" / ", artistNames(song)), album, seconds, artwork, 0));
             if (found.size() == capped) {
                 break;
             }
+        }
+        if (found.isEmpty() && dropped > 0) {
+            log.warn("网易云搜索《{}》的 {} 条候选全部被判定不可播", keyword, dropped);
         }
         return List.copyOf(found);
     }
@@ -269,6 +277,52 @@ public class NeteaseWebClient {
             return true;
         }
         return song.path("privilege").path("st").asInt(0) == -200;
+    }
+
+    /** cloudsearch 与 song/detail 两套字段名并存（artists/ar、album/al、duration/dt），取第一个存在的。 */
+    private static List<String> artistNames(JsonNode song) {
+        List<String> names = new ArrayList<>();
+        for (JsonNode item : firstArray(song, "artists", "ar")) {
+            String value = firstNonBlank(text(item, "name"), text(item, "artistName"));
+            if (!value.isBlank()) {
+                names.add(value);
+            }
+        }
+        return names;
+    }
+
+    private static JsonNode firstObject(JsonNode node, String... fields) {
+        for (String field : fields) {
+            JsonNode value = node.path(field);
+            if (value.isObject()) {
+                return value;
+            }
+        }
+        return MissingNode.getInstance();
+    }
+
+    private static JsonNode firstArray(JsonNode node, String... fields) {
+        for (String field : fields) {
+            JsonNode value = node.path(field);
+            if (value.isArray()) {
+                return value;
+            }
+        }
+        return MissingNode.getInstance();
+    }
+
+    private static JsonNode firstNumber(JsonNode node, String... fields) {
+        for (String field : fields) {
+            JsonNode value = node.path(field);
+            if (value.isNumber()) {
+                return value;
+            }
+        }
+        return MissingNode.getInstance();
+    }
+
+    private static String truncate(String json) {
+        return json.length() > 900 ? json.substring(0, 900) + "…" : json;
     }
 
     private static String text(JsonNode node, String field) {

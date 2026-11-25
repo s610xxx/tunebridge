@@ -104,6 +104,21 @@ class NeteaseWebClientTest {
     }
 
     @Test
+    void readsSongDetailStyleFieldNamesAsWellAsCloudsearchOnes() {
+        recorder.reply = new NeteaseTransport.Response(200, """
+                {"result":{"songs":[
+                  {"id":"7","name":"泡沫","ar":[{"name":"G.E.M.邓紫棋"}],"al":{"name":"Xposed","picUrl":"p.jpg"},"dt":262000}
+                ]}}""", List.of());
+
+        Track track = client.searchTracks("MUSIC_U=t", "泡沫", "G.E.M.", 6).get(0);
+
+        assertThat(track.artist()).isEqualTo("G.E.M.邓紫棋");
+        assertThat(track.album()).isEqualTo("Xposed");
+        assertThat(track.durationSec()).isEqualTo(262);
+        assertThat(track.artworkUrl()).isEqualTo("p.jpg");
+    }
+
+    @Test
     void readsTheCsrfTokenThatWriteEndpointsRequire() {
         assertThat(NeteaseWebClient.csrfToken("MUSIC_U=t; __csrf=ab12; NMTID=x")).isEqualTo("ab12");
         assertThat(NeteaseWebClient.csrfToken("MUSIC_U=t")).isEmpty();
