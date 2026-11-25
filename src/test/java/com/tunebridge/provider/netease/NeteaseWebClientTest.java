@@ -80,18 +80,17 @@ class NeteaseWebClientTest {
     }
 
     @Test
-    void dropsSongsThePlatformMarksUnplayable() {
+    void dropsOnlySongsThePlatformMarksAsDelisted() {
         recorder.reply = new NeteaseTransport.Response(200, """
                 {"result":{"songs":[
-                  {"id":"1","name":"不可播","visible":false},
-                  {"id":"2","name":"无版权","noCopyrightRcmd":{"cmd":1}},
                   {"id":"3","name":"已下架","privilege":{"st":-200}},
-                  {"id":"4","name":"正常","artists":[{"name":"G.E.M."}]}
+                  {"id":"4","name":"正常","artists":[{"name":"G.E.M."}]},
+                  {"id":"5","name":"会员曲","fee":1,"privilege":{"st":0}}
                 ]}}""", List.of());
 
         List<Track> tracks = client.searchTracks("MUSIC_U=t", "天空没有极限", "G.E.M.", 10);
 
-        assertThat(tracks).extracting(Track::providerTrackId).containsExactly("4");
+        assertThat(tracks).extracting(Track::providerTrackId).containsExactly("4", "5");
     }
 
     @Test
@@ -119,9 +118,10 @@ class NeteaseWebClientTest {
     }
 
     @Test
-    void retriesAnEmptySearchOnceAndUsesTheResultThatFollows() {
+    void retriesThrottledSearchAndUsesTheResultThatFollows() {
+        client.searchRetryDelays = new long[]{0, 0};
         recorder.queued.add(new NeteaseTransport.Response(200,
-                "{\"result\":{\"songs\":[]},\"header\":{\"code\":\"405\",\"msg\":\"操作频繁，请稍候再试\"}}", List.of()));
+                "{\"header\":{\"code\":\"405\",\"msg\":\"操作频繁，请稍候再试\"}}", List.of()));
         recorder.queued.add(new NeteaseTransport.Response(200,
                 "{\"result\":{\"songs\":[{\"id\":\"8\",\"name\":\"泡沫\",\"ar\":[{\"name\":\"G.E.M.邓紫棋\"}]}]}}",
                 List.of()));
@@ -132,11 +132,12 @@ class NeteaseWebClientTest {
     }
 
     @Test
-    void callsAThrottledEmptySearchThrottledInsteadOfNoMatch() {
-        recorder.queued.add(new NeteaseTransport.Response(200,
-                "{\"result\":{\"songs\":[]},\"header\":{\"code\":\"405\",\"msg\":\"操作频繁，请稍候再试\"}}", List.of()));
-        recorder.queued.add(new NeteaseTransport.Response(200,
-                "{\"result\":{\"songs\":[]},\"header\":{\"code\":\"405\",\"msg\":\"操作频繁，请稍候再试\"}}", List.of()));
+    void callsPersistentThrottlingThrottledInsteadOfNoMatch() {
+        client.searchRetryDelays = new long[]{0, 0};
+        for (int i = 0; i < 3; i++) {
+            recorder.queued.add(new NeteaseTransport.Response(200,
+                    "{\"header\":{\"code\":\"405\",\"msg\":\"操作频繁，请稍候再试\"}}", List.of()));
+        }
 
         assertThatThrownBy(() -> client.searchTracks("MUSIC_U=t", "泡沫", "G.E.M.", 6))
                 .isInstanceOf(ProviderException.class)

@@ -24,13 +24,14 @@ public class NeteaseWebClient {
     private static final String BASE = "https://music.163.com";
     private static final int MAX_TRACKS = 200;
     private static final int BATCH_SIZE = 20;
-    /** 风控降级时搜索会以"HTTP 200 + 空 songs"回来，与真的搜不到同形；先退避确认一次再定性。 */
-    private static final long[] EMPTY_RETRY_DELAY_MS = {5000};
+    /** 限流既可能返回非 200 业务码，也可能返回空 songs 数组，两者都与"真没有这首歌"同形，退避确认后再定性。 */
+    private static final long[] DEFAULT_SEARCH_RETRY_DELAYS = {8000, 25000};
     private static final String UNVERIFIED = "网易云歌单写入结果未确认，请到网易云客户端核对后再决定是否重试";
 
     private final NeteaseTransport transport;
     private final ObjectMapper objectMapper;
     private final AtomicBoolean shapeSampled = new AtomicBoolean();
+    long[] searchRetryDelays = DEFAULT_SEARCH_RETRY_DELAYS;
 
     public NeteaseWebClient(NeteaseTransport transport, ObjectMapper objectMapper) {
         this.transport = transport;
@@ -98,23 +99,24 @@ public class NeteaseWebClient {
         for (int attempt = 0; ; attempt++) {
             JsonNode body = searchOnce(cookie, keyword, capped);
             JsonNode songs = body.path("result").path("songs");
-            if (!songs.isArray()) {
-                throw ProviderException.upstream("网易云搜索响应格式无效（" + describeRejection(body) + "）");
-            }
-            if (!songs.isEmpty()) {
+            if (songs.isArray() && !songs.isEmpty()) {
                 return toTracks(songs, capped, keyword);
             }
-            if (attempt < EMPTY_RETRY_DELAY_MS.length) {
-                log.info("网易云搜索《{}》返回空结果（{}），{} 毫秒后重试", keyword, describeRejection(body),
-                        EMPTY_RETRY_DELAY_MS[attempt]);
-                sleep(EMPTY_RETRY_DELAY_MS[attempt]);
-                continue;
-            }
             String code = businessCode(body);
-            if (!code.isBlank() && !"200".equals(code)) {
-                throw ProviderException.upstream("网易云搜索被限流：空结果（业务码 " + code + "）");
+            boolean rejected = !code.isBlank() && !"200".equals(code);
+            if (rejected || songs.isEmpty()) {
+                if (attempt < searchRetryDelays.length) {
+                    log.info("网易云搜索《{}》未拿到候选（{}），{} 毫秒后重试", keyword, describeRejection(body),
+                            searchRetryDelays[attempt]);
+                    sleep(searchRetryDelays[attempt]);
+                    continue;
+                }
+                if (rejected) {
+                    throw ProviderException.upstream("网易云搜索被限流：请稍后重试（" + describeRejection(body) + "）");
+                }
+                return List.of();
             }
-            return List.of();
+            throw ProviderException.upstream("网易云搜索响应格式无效（" + describeRejection(body) + "）");
         }
     }
 
@@ -292,17 +294,10 @@ public class NeteaseWebClient {
     }
 
     /**
-     * 网易云用多个字段表达"不可播"，且各通道字段不齐：只在字段明确判定时丢弃，
-     * 缺失一律保留——误杀会让整首歌迁移失败，留下只是歌单里多一首灰歌。
+     * cloudsearch 候选的可播性只由 privilege.st 表达（实测字段清单里没有 visible 和 noCopyrightRcmd）：
+     * -200 是已下架/无版权，其余一律保留——误杀会让整首歌迁移失败，留下只是歌单里多一首灰歌。
      */
     private static boolean isUnplayable(JsonNode song) {
-        JsonNode visible = song.path("visible");
-        if (visible.isBoolean() && !visible.asBoolean()) {
-            return true;
-        }
-        if (song.path("noCopyrightRcmd").isObject()) {
-            return true;
-        }
         return song.path("privilege").path("st").asInt(0) == -200;
     }
 
