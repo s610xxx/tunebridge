@@ -100,6 +100,9 @@ public class NeteaseWebClient {
         }
         List<Track> found = new ArrayList<>();
         for (JsonNode song : songs) {
+            if (isUnplayable(song)) {
+                continue;
+            }
             String id = text(song, "id");
             String name = text(song, "name");
             if (id.isBlank() || name.isBlank()) {
@@ -251,6 +254,21 @@ public class NeteaseWebClient {
             throw ProviderException.upstream("网易云响应格式无效");
         }
         return new Reply(json, response.setCookies());
+    }
+
+    /**
+     * 网易云用多个字段表达"不可播"，且各通道字段不齐：只在字段明确判定时丢弃，
+     * 缺失一律保留——误杀会让整首歌迁移失败，留下只是歌单里多一首灰歌。
+     */
+    private static boolean isUnplayable(JsonNode song) {
+        JsonNode visible = song.path("visible");
+        if (visible.isBoolean() && !visible.asBoolean()) {
+            return true;
+        }
+        if (song.path("noCopyrightRcmd").isObject()) {
+            return true;
+        }
+        return song.path("privilege").path("st").asInt(0) == -200;
     }
 
     private static String text(JsonNode node, String field) {

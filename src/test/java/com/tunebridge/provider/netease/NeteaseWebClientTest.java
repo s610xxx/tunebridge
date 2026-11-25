@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tunebridge.domain.Track;
 import com.tunebridge.provider.ProviderException;
 import com.tunebridge.provider.netease.NeteaseWebClient.QrStatus;
 import java.util.List;
@@ -76,6 +77,30 @@ class NeteaseWebClientTest {
 
         assertThat(status.code()).isEqualTo(801);
         assertThat(recorder.cookie).isEqualTo("MUSIC_U=token; NMTID=abc");
+    }
+
+    @Test
+    void dropsSongsThePlatformMarksUnplayable() {
+        recorder.reply = new NeteaseTransport.Response(200, """
+                {"result":{"songs":[
+                  {"id":"1","name":"不可播","visible":false},
+                  {"id":"2","name":"无版权","noCopyrightRcmd":{"cmd":1}},
+                  {"id":"3","name":"已下架","privilege":{"st":-200}},
+                  {"id":"4","name":"正常","artists":[{"name":"G.E.M."}]}
+                ]}}""", List.of());
+
+        List<Track> tracks = client.searchTracks("MUSIC_U=t", "天空没有极限", "G.E.M.", 10);
+
+        assertThat(tracks).extracting(Track::providerTrackId).containsExactly("4");
+    }
+
+    @Test
+    void keepsSongsWhenTheResponseCarriesNoPlayabilitySignals() {
+        recorder.reply = new NeteaseTransport.Response(200,
+                "{\"result\":{\"songs\":[{\"id\":\"9\",\"name\":\"无字段\"}]}}", List.of());
+
+        assertThat(client.searchTracks("MUSIC_U=t", "无字段", "", 10))
+                .extracting(Track::providerTrackId).containsExactly("9");
     }
 
     @Test
