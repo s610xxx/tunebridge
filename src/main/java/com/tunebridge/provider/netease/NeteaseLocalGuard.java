@@ -27,12 +27,6 @@ public class NeteaseLocalGuard extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
             return;
         }
-        // PUBLIC 模式下允许远程访问，跳过本机同源校验
-        boolean isPublic = "PUBLIC".equalsIgnoreCase(System.getenv("TUNEBRIDGE_SECURITY_MODE"));
-        if (isPublic) {
-            filterChain.doFilter(request, response);
-            return;
-        }
         // LOCAL 模式下严格限制本机同源访问
         String host = request.getHeader("Host");
         int port = request.getLocalPort();

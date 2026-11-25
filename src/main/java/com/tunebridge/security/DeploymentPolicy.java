@@ -37,7 +37,12 @@ public final class DeploymentPolicy {
             String code = properties.getRegistrationCode();
             require(code != null && !code.isBlank() && code.length() >= 32 && code.length() <= 128,
                     "Public mode requires a registration code of 32 to 128 characters");
-            // PUBLIC 模式下允许配置配对码和 CLI，用于数据中心 IP 场景下的网易云连接
+            // 配对码可换取服务器本机 CLI 的子进程执行权，公网多用户场景下不得暴露
+            for (String key : List.of("tunebridge.netease.pairing-code", "tunebridge.netease.node-executable",
+                    "tunebridge.netease.cli-entry")) {
+                require(environment.getProperty(key, "").isBlank(),
+                        "Public mode forbids local NetEase pairing and CLI configuration");
+            }
         }
     }
 
