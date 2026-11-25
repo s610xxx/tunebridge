@@ -73,9 +73,10 @@ public class NeteaseWebClient {
         params.put("limit", capped);
         params.put("offset", 0);
         params.put("total", "false");
-        JsonNode songs = post("/api/cloudsearch/pc", params, cookie).json().path("result").path("songs");
+        JsonNode body = post("/api/cloudsearch/pc", params, cookie).json();
+        JsonNode songs = body.path("result").path("songs");
         if (!songs.isArray()) {
-            throw ProviderException.upstream("网易云搜索响应格式无效");
+            throw ProviderException.upstream("网易云搜索响应格式无效（" + describeRejection(body) + "）");
         }
         List<Track> found = new ArrayList<>();
         for (JsonNode song : songs) {
@@ -109,7 +110,7 @@ public class NeteaseWebClient {
         JsonNode body = post("/api/playlist/create", params, cookie).json();
         String id = firstNonBlank(text(body, "id"), text(body.path("playlist"), "id"), text(body.path("data"), "id"));
         if (id.isBlank()) {
-            throw ProviderException.upstream("网易云未返回新歌单 ID");
+            throw ProviderException.upstream("网易云未返回新歌单 ID（" + describeRejection(body) + "）");
         }
         String returnedName = firstNonBlank(text(body.path("playlist"), "name"), name);
         return new CreatedPlaylist(id, returnedName, BASE + "/#/playlist?id=" + id, 0, Map.of());
@@ -234,6 +235,21 @@ public class NeteaseWebClient {
     private static String text(JsonNode node, String field) {
         JsonNode value = node == null ? null : node.path(field);
         return value == null || value.isNull() || value.isMissingNode() ? "" : String.valueOf(value.asText(""));
+    }
+
+    /** 网易云把拒因放在 header.code/msg，顶层 code/msg 只是兜底；风控命中时这是唯一的线索，不能吞掉。 */
+    private static String describeRejection(JsonNode body) {
+        JsonNode header = body.path("header");
+        String code = firstNonBlank(text(header, "code"), text(body, "code"));
+        String message = firstNonBlank(text(header, "msg"), text(body, "msg"));
+        if (code.isBlank() && message.isBlank()) {
+            List<String> names = new ArrayList<>();
+            body.fieldNames().forEachRemaining(names::add);
+            return names.isEmpty() ? "无业务码，响应为空"
+                    : "无业务码，字段 " + String.join("/", names.subList(0, Math.min(6, names.size())));
+        }
+        String trimmed = message.length() > 80 ? message.substring(0, 80) : message;
+        return trimmed.isBlank() ? "业务码 " + code : "业务码 " + code + "：" + trimmed;
     }
 
     private static String firstNonBlank(String... values) {
