@@ -158,8 +158,9 @@
         }
         checkGeneration(generation);
         let payload = null;
+        let parsed = false;
         if (text) {
-            try { payload = JSON.parse(text); } catch (ignored) { /* Invalid responses are not retried. */ }
+            try { payload = JSON.parse(text); parsed = true; } catch (ignored) { /* Invalid responses are not retried. */ }
         }
         if (!response.ok) {
             const error = Object.assign(new Error(payload && payload.error ? payload.error : `请求失败（${response.status}）`), {
@@ -180,7 +181,7 @@
             }
             throw error;
         }
-        if (text && payload === null) throw new Error('服务返回了无效响应；不会自动重试操作');
+        if (text && !parsed) throw new Error('服务返回了无效响应；不会自动重试操作');
         return payload;
     }
 
