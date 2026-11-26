@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="音桥">
+  <rect width="64" height="64" rx="14" fill="#0a0f1a"/>
+  <path d="M8 40c8-14 40-14 48 0" fill="none" stroke="#39d7ff" stroke-width="5" stroke-linecap="round"/>
+  <path d="M8 40v10M56 40v10M22 33v17M42 33v17" stroke="#7c6cff" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="32" cy="20" r="5" fill="#e8eefc"/>
+</svg>

@@ -1,0 +1,2 @@
+# Sites 发布描述符：内嵌账号/站点标识与冻结快照，由 prepare_site 在本机重新生成，不是源码。
+.*.qoder.site
