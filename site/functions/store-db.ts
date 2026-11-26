@@ -30,6 +30,17 @@ function errorText(error: unknown): string {
   try { return JSON.stringify(error); } catch { return String(error); }
 }
 
+/**
+ * 平台库对不存在的表只回 { code: "database_request_failed", status: 404 }，没有可读文案；
+ * 逻辑名探测因此必须把 404 也当作"表不存在"，才能回退到 tb_ 前缀。
+ */
+function isMissingTable(error: unknown): boolean {
+  if (error !== null && typeof error === "object") {
+    if (Number((error as { status?: unknown }).status) === 404) return true;
+  }
+  return MISSING_TABLE.test(errorText(error));
+}
+
 function databaseFailure(error: unknown): ProviderApiError {
   console.error("database operation failed", error);
   return new ProviderApiError(503, "database_unavailable", "数据服务暂时不可用，请稍后重试");
@@ -46,7 +57,7 @@ async function withTable<T>(logical: string, run: (table: string) => Promise<T> 
       const error = replyError(reply);
       if (error !== null) {
         last = error;
-        if (hasFallback && MISSING_TABLE.test(errorText(error))) continue;
+        if (hasFallback && isMissingTable(error)) continue;
         throw databaseFailure(error);
       }
       tableNames.set(logical, candidates[i]);
@@ -54,7 +65,7 @@ async function withTable<T>(logical: string, run: (table: string) => Promise<T> 
     } catch (error) {
       if (error instanceof ProviderApiError) throw error;
       last = error;
-      if (hasFallback && MISSING_TABLE.test(errorText(error))) continue;
+      if (hasFallback && isMissingTable(error)) continue;
       throw databaseFailure(error);
     }
   }
