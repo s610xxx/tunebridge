@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>音桥 TuneBridge · 音乐歌单迁移，逐首可见</title>
+<meta name="description" content="音桥把 Apple Music 的资料库搬到 QQ 音乐，或把 QQ 音乐歌单搬到网易云音乐。粘贴歌单链接、逐首匹配、勾选确认后写入，每一首歌的去向都有报告。">
+<meta name="color-scheme" content="dark light">
+<meta property="og:title" content="音桥 TuneBridge · 音乐歌单迁移，逐首可见">
+<meta property="og:description" content="逐首匹配报告、两阶段确认、可导出的迁移历史。支持 Apple Music → QQ 音乐、QQ 音乐 → 网易云音乐，以及不碰真实账号的演示模式。">
+<meta property="og:type" content="website">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip" href="#main">跳到主要内容</a>
+
+<header class="bar">
+  <div class="wrap bar-in">
+    <a class="brand" href="#top" aria-label="音桥 TuneBridge 首页">
+      <svg viewBox="0 0 64 64" aria-hidden="true" class="mark">
+        <path d="M8 40c8-14 40-14 48 0" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round"/>
+        <path d="M8 40v12M56 40v12M22 33v19M42 33v19" stroke="currentColor" stroke-width="5" stroke-linecap="round" opacity=".55"/>
+      </svg>
+      <span>音桥 <em>TuneBridge</em></span>
+    </a>
+    <nav class="nav" id="nav" aria-label="页面导航">
+      <a href="#directions">迁移方向</a>
+      <a href="#flow">工作流程</a>
+      <a href="#report">匹配报告</a>
+      <a href="#more">更多能力</a>
+      <a href="#security">凭据与数据</a>
+      <a href="#deploy">部署</a>
+      <a href="#faq">常见问题</a>
+    </nav>
+    <div class="bar-actions">
+      <a class="btn primary" href="https://8.140.234.83:8443/">打开在线版</a>
+      <button class="menu" id="menu" type="button" aria-expanded="false" aria-controls="nav" aria-label="展开导航">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero" id="top">
+    <div class="wrap hero-in">
+      <div class="hero-copy">
+        <p class="eyebrow">歌单迁移工具</p>
+        <h1>换一个音乐 App<br>不必重新收藏<span class="hl">几百首歌</span></h1>
+        <p class="lead">平台之间没有官方迁移通道，手动逐首搜索重建一张歌单要花掉几十分钟。音桥把这件事收进一个浏览器页面：粘贴来源歌单链接，逐首搜索匹配，<strong>由你勾选确认后</strong>才写入目标平台，并给出每一首的去向报告。</p>
+        <div class="hero-cta">
+          <a class="btn primary" href="https://8.140.234.83:8443/">打开在线版</a>
+          <a class="btn ghost" href="#flow">看它怎么工作</a>
+        </div>
+        <p class="note">在线版需要邀请码注册音桥账号。想先看看流程，用内置的演示模式，不会接触任何真实账号。</p>
+      </div>
+
+      <div class="hero-art" aria-hidden="true">
+        <svg viewBox="0 0 520 360" class="bridge">
+          <defs>
+            <linearGradient id="arc" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stop-color="var(--site-accent)"/>
+              <stop offset="1" stop-color="var(--violet)"/>
+            </linearGradient>
+          </defs>
+          <g class="beam">
+            <path d="M40 250C140 90 380 90 480 250" fill="none" stroke="url(#arc)" stroke-width="7" stroke-linecap="round"/>
+            <path d="M40 250V320M480 250V320" stroke="var(--site-border)" stroke-width="6" stroke-linecap="round"/>
+            <g stroke="var(--violet)" stroke-width="4" stroke-linecap="round" opacity=".7">
+              <path d="M112 186V250M176 152V250M260 140V250M344 152V250M408 186V250"/>
+            </g>
+          </g>
+          <g class="notes">
+            <circle cx="260" cy="122" r="11" fill="var(--site-accent)"/>
+            <path d="M271 122V78l30-8v44" fill="none" stroke="var(--site-accent)" stroke-width="5" stroke-linecap="round"/>
+          </g>
+          <g class="wave" stroke="var(--site-accent)" stroke-width="5" stroke-linecap="round">
+            <path d="M74 300v-24M96 300v-44M118 300v-28M140 300v-52M162 300v-30"/>
+            <path d="M358 300v-30M380 300v-52M402 300v-28M424 300v-44M446 300v-24" opacity=".7"/>
+          </g>
+          <text x="40" y="348" class="tag" fill="var(--site-muted)">来源歌单</text>
+          <text x="480" y="348" class="tag end" fill="var(--site-muted)">目标平台</text>
+        </svg>
+        <ul class="chips">
+          <li>Apple Music</li>
+          <li>QQ 音乐</li>
+          <li>网易云音乐</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="directions">
+    <div class="wrap">
+      <h2>三条可用通道</h2>
+      <p class="section-lead">方向不同，接入方式也不同。音桥把每条通道的边界写在页面上，而不是等你踩到才提示。</p>
+      <div class="grid three">
+        <article class="card">
+          <h3><span class="arrow">→</span>Apple Music 到 QQ 音乐</h3>
+          <p>从 Apple 网页版复制 <code>media-user-token</code> 粘贴即可读取整个资料库，<strong>不需要 Apple 开发者账号</strong>。服务端自动轮换缓存该令牌。</p>
+          <p class="tight">迁出方向为只读；写入 Apple 需要开发者令牌，默认关闭。</p>
+        </article>
+        <article class="card">
+          <h3><span class="arrow">→</span>QQ 音乐 到 网易云音乐</h3>
+          <p>已接入完整的搜索、匹配、创建歌单、分批写入，以及写后<strong>回读校验</strong>——回读发现曲目没落全，会明确告诉你结果未确认，而不是假装成功。</p>
+          <p class="tight">网易云只作为目标平台，不能作为迁移来源。</p>
+        </article>
+        <article class="card">
+          <h3><span class="dot"></span>演示模式</h3>
+          <p>使用内置曲库跑通全流程，不访问也不修改任何真实账号。双向迁移都可以在这里先试一遍，再决定是否接自己的账号。</p>
+          <p class="tight">适合看报告长什么样、确认交互是否合手。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="flow">
+    <div class="wrap split">
+      <div>
+        <h2>两阶段确认：先匹配，再写入</h2>
+        <p class="section-lead">匹配阶段对目标平台<strong>只读</strong>。只有你审阅完逐首结果并点击确认，音桥才会创建歌单、写入曲目。</p>
+        <ol class="steps">
+          <li><span>1</span><div><h4>连接目标平台</h4><p>QQ 音乐粘贴浏览器 Cookie；网易云可用 App 扫码登录，或直接粘贴网页端 Cookie。</p></div></li>
+          <li><span>2</span><div><h4>粘贴来源歌单链接</h4><p>音桥解析歌单、读取曲目，也可粘贴每行一首的文本或导入 CSV / JSON。</p></div></li>
+          <li><span>3</span><div><h4>逐首搜索与匹配</h4><p>在目标平台搜索候选，按标题、歌手、专辑与版本差异打分，低置信默认不勾选。</p></div></li>
+          <li><span>4</span><div><h4>勾选后确认写入</h4><p>创建目标歌单、分批写入，再回读核对曲目是否真的落库，最后生成迁移报告。</p></div></li>
+        </ol>
+        <p class="note">服务端始终只允许一个未结束任务；批量队列也不会自动重试——每一份都要你明确确认。</p>
+      </div>
+
+      <figure class="shot" id="report">
+        <figcaption class="shot-head">
+          <span class="live">匹配报告</span>
+          <span class="demo-tag">示意数据</span>
+        </figcaption>
+        <div class="rows">
+          <div class="row ok">
+            <span class="tick">✓</span>
+            <div><strong>摩天动物园</strong><small>G.E.M.邓紫棋 · 专辑《摩天动物园》</small></div>
+            <span class="score">100%</span>
+          </div>
+          <div class="row ok">
+            <span class="tick">✓</span>
+            <div><strong>A.I.N.Y.</strong><small>G.E.M.邓紫棋 · 专辑《18 Plus》</small></div>
+            <span class="score">98%</span>
+          </div>
+          <div class="row warn">
+            <span class="tick">−</span>
+            <div><strong>You Raise Me Up (Live)</strong><small>目标命中《歌手 第13期》版本，歌手不一致</small></div>
+            <span class="score low">60%</span>
+          </div>
+          <div class="row miss">
+            <span class="tick">×</span>
+            <div><strong>某首未收录的现场版</strong><small>目标平台无候选，记为未匹配</small></div>
+            <span class="score none">0%</span>
+          </div>
+        </div>
+        <p class="shot-foot">每行给出匹配分与判定理由，例如「标题一致，歌手信息有差异」「检测到 Live / Remix 等版本差异」。未匹配与已跳过的曲目会留在报告里。</p>
+      </figure>
+    </div>
+  </section>
+
+  <section class="band" id="more">
+    <div class="wrap">
+      <h2>迁移之外</h2>
+      <div class="grid four">
+        <article class="card">
+          <h3>歌单备份</h3>
+          <p>读取 QQ 歌单、粘贴曲目或导入 CSV / JSON，预览后导出。导入文件在浏览器本地处理，不上传。</p>
+        </article>
+        <article class="card">
+          <h3>恢复到平台</h3>
+          <p>把任意一份备份当作来源，恢复到已连接的平台——不依赖原平台账号，导出的文件也能直接迁。</p>
+        </article>
+        <article class="card">
+          <h3>迁移历史</h3>
+          <p>报告快照写入本地数据库，服务重启后仍可回看。按平台、状态、时间区间筛选，导出摘要 CSV、逐首匹配 CSV 与报告 JSON。</p>
+        </article>
+        <article class="card">
+          <h3>批量队列</h3>
+          <p>列出来源账号的歌单或一次粘贴多条链接排成队列，单次最多 10 份，逐份「匹配 → 勾选 → 写入」，最后导出批次小结。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="band alt" id="security">
+    <div class="wrap split">
+      <div>
+        <h2>平台凭据只活在一次会话里</h2>
+        <p class="section-lead">音桥要拿到你的音乐平台账号才能干活，所以这条边界必须写清楚，而不是藏在隐私政策里。</p>
+        <ul class="checks">
+          <li>扫码登录与粘贴得到的平台凭据，只保存在服务端会话内存：<strong>不落库、不写日志、不回传前端</strong>。</li>
+          <li>断开连接或会话过期，凭据即刻清除。</li>
+          <li>本地数据库只保存音桥账号的用户名、密码哈希与迁移报告快照——报告里不含平台凭据。</li>
+          <li>音桥账号是你在这个站上用的账号，<strong>不是音乐平台账号</strong>；任务与历史按账号隔离。</li>
+          <li>导入的 CSV / JSON 在浏览器本地解析，不产生服务端文件。</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3>两种部署边界</h3>
+        <dl>
+          <dt>LOCAL 模式</dt>
+          <dd>默认只监听 <code>127.0.0.1</code>。自己的电脑上跑，凭据不出本机，可额外启用网易云官方 CLI 配对。</dd>
+          <dt>PUBLIC 模式</dt>
+          <dd>需要原生 TLS、<code>publicOrigin</code> 精确匹配与安全响应头，注册需邀请码。此模式会拒绝本机 CLI 配对码相关配置，真实账号只走平台登录。</dd>
+        </dl>
+        <div class="term" role="region" aria-label="本地启动命令示例" tabindex="0">
+          <span class="cmt"># 需要 JDK 21 与 Maven 3.6.3+</span>
+          git clone https://github.com/s610xxx/tunebridge.git
+          cd tunebridge
+          mvn spring-boot:run
+          <span class="cmt"># 打开 http://localhost:8080</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="deploy">
+    <div class="wrap">
+      <h2>知道自己会撞到什么</h2>
+      <p class="section-lead">音桥使用的是各音乐平台的非官方接口。以下限制来自实测，不是免责声明的套话。</p>
+      <div class="grid three limits">
+        <article class="card">
+          <h3>上游会限流</h3>
+          <p>真实迁移每匹配一首就要搜索一次。网易云在数十次搜索后可能返回「操作频繁」，音桥会退避重试；重试仍失败时<strong>终止本次匹配</strong>，不会交付一份缺歌的确认页。</p>
+        </article>
+        <article class="card">
+          <h3>每次都会建新歌单</h3>
+          <p>确认写入会创建新的目标歌单，单次最多 200 首。若写入结果不确定，请先到平台核对再决定是否重试，避免留下重复歌单。</p>
+        </article>
+        <article class="card">
+          <h3>读取受平台影响</h3>
+          <p>来源歌单能否读全、票据能撑多久，取决于上游接口与账号状态（QQ 登录票据约 3 天过期）。接口变动时页面会给出可操作的提示，而不是静默失败。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="band" id="faq">
+    <div class="wrap narrow">
+      <h2>常见问题</h2>
+      <details>
+        <summary>网易云音乐能当迁移来源吗？</summary>
+        <p>不能。当前实现里网易云只作为目标平台，读取歌单的接口会直接返回「暂不支持作为来源平台」。要从网易云往外迁，可以先用其他方式导出，再用「备份恢复」把曲目恢复到目标平台。</p>
+      </details>
+      <details>
+        <summary>不注册音桥账号能用吗？</summary>
+        <p>在线版需要邀请码注册，目的是把任务与历史按账号隔离。自己按 LOCAL 模式跑一份，则不需要邀请码，也不需要公网 TLS。</p>
+      </details>
+      <details>
+        <summary>迁移会改动或删除我原来的歌单吗？</summary>
+        <p>不会。来源平台全程只读；目标平台的写入动作只发生在你点击「确认迁移」之后，且只新建歌单与追加曲目。</p>
+      </details>
+      <details>
+        <summary>为什么有的歌匹配不上？</summary>
+        <p>三种常见原因：目标平台确实没有这首歌；命中了但版本差异过大被标为低置信（默认不勾选，由你决定）；或该次搜索被上游限流，此时任务会终止而不是留一个残缺结果。</p>
+      </details>
+      <details>
+        <summary>报告能留存多久？</summary>
+        <p>报告快照写入服务端数据库，重启后仍可在「迁移历史」查看、筛选与导出。历史是只读的，不会在里面重新执行写入或自动重试。</p>
+      </details>
+    </div>
+  </section>
+
+  <section class="closer">
+    <div class="wrap close-in">
+      <h2>先拿一份真实歌单试试</h2>
+      <p>演示模式不用连任何账号，几分钟就能看清它给出的报告长什么样。</p>
+      <a class="btn primary big" href="https://8.140.234.83:8443/">打开在线版</a>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <p class="fine">音桥 TuneBridge · 2026 Qoder 高校创造力大赛 · LifeHack 生活娱乐赛道</p>
+    <p class="fine">本项目通过各音乐平台的非官方接口工作，仅供学习与个人迁移使用；请遵守各平台的服务条款。</p>
+  </div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
