@@ -171,6 +171,25 @@ export SESSION_COOKIE_SECURE=true
 
 两种模式共用同一套边界规则：写接口必须带会话 CSRF 头，登录成功会更换会话 ID，未登录访问 API 返回 401 `AUTH_REQUIRED`，跨站来源或伪造 `Host` 返回 403 `BOUNDARY_REJECTED`。
 
+## Qoder Sites 部署版
+
+`site/` 是可直接部署到 Qoder Sites 的 TypeScript 版本，用于比赛线上演示：
+
+- `site/web/`：与线上工作台一致的静态前端（原生 HTML/CSS/JS，无构建步骤）。
+- `site/functions/`：Deno Edge Functions，覆盖 Qoder 登录态 + CSRF、连接管理、QQ 公开歌单/备份读取、分片匹配、确认写入与续跑、演示音乐库、历史分页筛选、只读报告；平台数据库适配器在 `store-db.ts`。
+- `site/functions/_qoder/backend.mjs` 由平台在发布时注入，不在仓库中，也不应提交。
+
+本地验证（不触达真实平台，用假 `CREDENTIAL_KEY` 驱动）：
+
+```bash
+export CREDENTIAL_KEY=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
+for f in dev/verify-*.mjs; do node "$f" || exit 1; done
+```
+
+`dev/verify-live-contract.mjs` 按浏览器实际调用顺序覆盖线上工作台的主要契约；其余脚本对拍 Java 实现。线上部署通过 Qoder Sites 的 `prepare_site` → `publish_site` 流程完成，数据库沿用同一 Project 的 `tb_connections`、`tb_jobs`、`tb_demo_state`、`tb_qr_sessions`。
+
+与 Java 版的差异只在平台能力边界，不在业务契约：JVM/Spring Boot 无法在 Sites 运行；Apple Music 真实通道、网易云扫码登录与本机 CLI 受云端出口限制不开放，相关入口返回明确说明。QQ 真实写入、网易云 Cookie 真实写入、演示模式、备份迁移、历史与只读报告均可用。
+
 ## 文档
 
 - [产品需求文档（PRD）](docs/PRD.md)

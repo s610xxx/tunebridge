@@ -165,9 +165,18 @@ check("重复放弃被拒", abandonTwice.status === 409 && abandonTwice.body.cod
 /* ---- 7. 断开连接 ---- */
 const dropped = await call("DELETE", "/connections/QQ_MUSIC");
 check("断开返回 204", dropped.status === 204, String(dropped.status));
+const afterDropList = await call("GET", "/playlists", { query: "?provider=QQ_MUSIC" });
+check("断开后歌单列表报未连接", afterDropList.status === 409 && afterDropList.body.code === "NOT_CONNECTED",
+  afterDropList.status + " " + afterDropList.body?.code + " " + afterDropList.body?.error);
+// QQ 公开链接不需要登录，但 demo:// 仍必须先连演示账号；两种错误不能混。
 const afterDrop = await call("POST", "/playlists/preview", { body: { provider: "QQ_MUSIC", url: "demo://builtin" } });
-check("断开后来源读取报未连接", afterDrop.status === 409 && afterDrop.body.code === "NOT_CONNECTED",
+check("断开后演示预览提示先连演示账号", afterDrop.status === 400 && afterDrop.body.code === "INVALID_INPUT"
+  && /演示账号|演示连接/.test(afterDrop.body.error),
   afterDrop.status + " " + afterDrop.body?.code + " " + afterDrop.body?.error);
+const afterDropStart = await call("POST", "/migrations", { body: { sourceProvider: "QQ_MUSIC",
+  sourceUrl: "demo://builtin", targetProvider: "NETEASE_MUSIC" } });
+check("断开后建迁移任务报未连接", afterDropStart.status === 409 && afterDropStart.body.code === "NOT_CONNECTED",
+  afterDropStart.status + " " + afterDropStart.body?.code + " " + afterDropStart.body?.error);
 
 const stillSafe = await call("GET", "/state");
 check("断开后 state 只剩一条连接", Object.keys(stillSafe.body.connections ?? {}).length === 1,

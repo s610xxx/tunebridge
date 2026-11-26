@@ -32,6 +32,8 @@ export type NetTrack = {
   album: string;
   durationSec: number;
   artworkUrl: string;
+  /** QQ 搜索会带回 songtype；网易云候选不填，写入时默认 0。 */
+  songType?: number;
 };
 
 export type CreatedPlaylist = { id: string; name: string; url: string };

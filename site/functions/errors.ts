@@ -43,7 +43,7 @@ export class ProviderApiError extends Error {
   }
 
   /** 音桥账号未登录：前端见到 401 + AUTH_REQUIRED 才会清会话并提示，不能换成别的码。 */
-  static authRequired(message = "请先登录音桥账号"): ProviderApiError {
+  static authRequired(message = "请先登录 Qoder 账号"): ProviderApiError {
     return new ProviderApiError(401, "AUTH_REQUIRED", message);
   }
 

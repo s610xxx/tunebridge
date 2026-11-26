@@ -20,6 +20,8 @@ export type MatchRow = {
   targetAlbum: string;
   targetArtworkUrl: string;
   targetTrackId: string;
+  /** QQ 真实写入需要原样带 songtype；旧任务没有该字段时按 0 处理。 */
+  targetSongType?: number;
   score: number;
   note: string;
 };
@@ -37,12 +39,14 @@ export type Job = {
   sourceUrl: string | null;
   targetProvider: string;
   targetMode: string;
+  /** 建任务时的目标连接时间戳，用来识别“同模式但换了连接”；旧任务缺省时退回模式比对。 */
+  targetConnectionAt?: number;
   requestedName: string;
   status: JobStatus;
   progress: number;
   currentStep: string;
   sourceTracks: { providerTrackId: string; title: string; artist: string; album: string; durationSec: number; artworkUrl: string; songType: number }[];
-  sourcePlaylist: { name: string; coverUrl: string; owner: string } | null;
+  sourcePlaylist: { name: string; coverUrl: string; owner: string; trackCount?: number } | null;
   matches: MatchRow[];
   selected: number[];
   /** 下一个待搜索的来源曲目下标；也是断点续跑的游标。 */
@@ -50,7 +54,8 @@ export type Job = {
   /** 限流后退到什么时候再试；0 表示不等待。 */
   nextAttemptAt: number;
   retryHint: string;
-  createdTarget: { id: string; name: string; url: string } | null;
+  /** tid 是 QQ 建单后写歌的凭据句柄，随任务持久化，跨函数实例续写也不丢。 */
+  createdTarget: { id: string; name: string; url: string; tid?: string } | null;
   /** 已确认写入的曲目 id，重跑时只补这些之外的。 */
   writtenIds: string[];
   pendingWriteIds: string[];
@@ -72,6 +77,7 @@ export function createJob(input: {
   sourceUrl: string | null;
   targetProvider: string;
   targetMode: string;
+  targetConnectionAt?: number;
   requestedName: string;
   now?: number;
 }): Job {
@@ -84,6 +90,7 @@ export function createJob(input: {
     sourceUrl: input.sourceUrl,
     targetProvider: input.targetProvider,
     targetMode: input.targetMode,
+    targetConnectionAt: input.targetConnectionAt,
     requestedName: input.requestedName,
     status: "RUNNING",
     progress: 2,
@@ -111,14 +118,18 @@ export function createJob(input: {
   return job;
 }
 
+const MATCH_TRACK_LIMIT = 200;
+
 export function attachSource(job: Job, playlist: {
   name: string; coverUrl?: string; owner?: string; tracks: Job["sourceTracks"];
 }, now = Date.now()): void {
-  job.sourcePlaylist = { name: playlist.name, coverUrl: playlist.coverUrl ?? "", owner: playlist.owner ?? "" };
-  job.sourceTracks = playlist.tracks;
+  const total = playlist.tracks.length;
+  job.sourcePlaylist = { name: playlist.name, coverUrl: playlist.coverUrl ?? "",
+    owner: playlist.owner ?? "", trackCount: total };
+  job.sourceTracks = playlist.tracks.slice(0, MATCH_TRACK_LIMIT);
   job.currentStep = "正在读取来源歌单";
   bump(job, 5, now);
-  log(job, "已读取《" + playlist.name + "》，共 " + job.sourceTracks.length + " 首", "INFO");
+  log(job, "已读取《" + playlist.name + "》，共 " + total + " 首", "SUCCESS");
 }
 
 export function trackCount(job: Job): number {
@@ -133,6 +144,10 @@ function bump(job: Job, target: number, now: number): void {
 function log(job: Job, message: string, level: LogEntry["level"] = "INFO"): void {
   job.logs.push({ message, level, at: new Date().toISOString() });
   if (job.logs.length > 400) job.logs.splice(0, job.logs.length - 400);
+}
+
+export function logJob(job: Job, message: string, level: LogEntry["level"] = "INFO"): void {
+  log(job, message, level);
 }
 
 export type MatchAdvance =
@@ -186,7 +201,7 @@ export async function advanceMatch(
         source: pick(source), matched: true, lowConfidence: evaluation.lowConfidence,
         targetTitle: hit.title, targetArtist: hit.artist, targetAlbum: hit.album,
         targetArtworkUrl: hit.artworkUrl, targetTrackId: hit.providerTrackId,
-        score: evaluation.score, note: evaluation.note,
+        targetSongType: hit.songType, score: evaluation.score, note: evaluation.note,
       });
       if (!evaluation.lowConfidence) job.selected.push(job.matches.length - 1);
       log(job, "✓ " + source.title + " → " + hit.title + "（" + percent(evaluation.score) + "%）"
@@ -224,10 +239,12 @@ export type ConfirmOutcome =
 
 /** 确认写入。已建过的歌单与已落库的曲目都记住，重跑只补差集（issue #7 的续跑原语）。 */
 export async function confirmJob(job: Job, indices: (number | null)[], deps: {
-  createPlaylist: (name: string) => Promise<{ id: string; name: string; url: string }>;
+  createPlaylist: (name: string) => Promise<{ id: string; name: string; url: string; tid?: string }>;
   addTracks: (target: { id: string }, ids: string[]) => Promise<{ kind: "written"; count: number }
     | { kind: "throttled"; written: number; retryAfterMs: number }>;
   playlistNameFor: (job: Job) => string;
+  /** 建单成功后立刻落一次库，避免"已建单但响应丢失"被下一请求重复创建。 */
+  checkpoint?: () => Promise<void>;
   now?: number;
 }): Promise<ConfirmOutcome> {
   const now = deps.now ?? Date.now();
@@ -241,10 +258,12 @@ export async function confirmJob(job: Job, indices: (number | null)[], deps: {
       }
       seen.add(index);
     }
-    job.selected = [...seen];
-    job.pendingWriteIds = [...seen].map(index => job.matches[index].targetTrackId);
-    if (new Set(job.pendingWriteIds).size !== job.pendingWriteIds.length) {
-      throw ProviderApiError.badRequest("待写入的歌曲里有重复项");
+    const ordered = [...seen].sort((a, b) => a - b);
+    job.selected = ordered;
+    job.pendingWriteIds = ordered.map(index => job.matches[index].targetTrackId);
+    if (job.targetProvider === "NETEASE_MUSIC"
+        && new Set(job.pendingWriteIds).size !== job.pendingWriteIds.length) {
+      throw ProviderApiError.badRequest("网易云不能重复加入同一首歌曲，请取消重复的匹配项");
     }
     log(job, "已确认迁移 " + seen.size + " 首，跳过 "
       + (job.matches.filter(row => row.matched).length - seen.size) + " 首匹配项", "INFO");
@@ -258,6 +277,7 @@ export async function confirmJob(job: Job, indices: (number | null)[], deps: {
 
   if (!job.createdTarget) {
     job.createdTarget = await deps.createPlaylist(deps.playlistNameFor(job));
+    await deps.checkpoint?.();
   }
   job.currentStep = "正在写入歌曲";
   bump(job, 88, now);
@@ -327,6 +347,15 @@ export function reap(job: Job, now = Date.now()): { evictable: boolean } {
   return { evictable: isTerminal(job) && job.createdAt < cutoff };
 }
 
+const PROVIDER_LABELS: Record<string, string> = {
+  QQ_MUSIC: "QQ 音乐", APPLE_MUSIC: "Apple Music", NETEASE_MUSIC: "网易云音乐",
+  LOCAL_BACKUP: "本地备份",
+};
+
+function providerLabel(provider: string): string {
+  return PROVIDER_LABELS[provider] ?? provider;
+}
+
 /** 与 Java JobView 同形；浏览器代码不需要为 Sites 版改字段名。 */
 export function jobView(job: Job, readOnly = false): Record<string, unknown> {
   const sourceProvider = job.sourceLabel === null ? job.sourceProvider : "LOCAL_BACKUP";
@@ -340,13 +369,13 @@ export function jobView(job: Job, readOnly = false): Record<string, unknown> {
     currentStep: job.currentStep,
     source: {
       provider: sourceProvider,
-      providerLabel: job.sourceLabel ?? job.sourceProvider,
+      providerLabel: job.sourceLabel ?? providerLabel(job.sourceProvider),
       name: job.sourcePlaylist ? job.sourcePlaylist.name : (job.requestedName || "正在读取歌单"),
       coverUrl: job.sourcePlaylist ? job.sourcePlaylist.coverUrl : "",
       owner: job.sourcePlaylist ? job.sourcePlaylist.owner : "",
-      trackCount: job.sourcePlaylist ? job.sourceTracks.length : 0,
+      trackCount: job.sourcePlaylist ? (job.sourcePlaylist.trackCount ?? job.sourceTracks.length) : 0,
     },
-    target: { provider: job.targetProvider, providerLabel: job.targetProvider, mode: job.targetMode },
+    target: { provider: job.targetProvider, providerLabel: providerLabel(job.targetProvider), mode: job.targetMode },
     logs: job.logs,
     matches: job.matches.map((row, index) => ({
       index,

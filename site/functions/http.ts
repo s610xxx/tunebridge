@@ -39,9 +39,12 @@ export function json(data: unknown, status = 200, headers: HeadersInit = {}): Re
 /** 与 Java ApiExceptionHandler 一致：响应体恒为 { error, code }。 */
 export function errorResponse(error: unknown): Response {
   if (error instanceof UserContextError) {
-    const code = error.code === "login_required" ? "AUTH_REQUIRED" : "CSRF_INVALID";
-    const status = error.code === "login_required" ? 401 : 403;
-    return json({ error: status === 401 ? "请先登录音桥账号" : "安全令牌已失效，请刷新页面后手动重试", code }, status);
+    // 上下文缺失/过期都是"重新登录"，只有 CSRF 失败才让前端走刷新令牌分支。
+    const auth = error.code === "login_required" || error.code === "invalid_user_context";
+    return json({
+      error: auth ? "请先登录 Qoder 账号" : "安全令牌已失效，请刷新页面后手动重试",
+      code: auth ? "AUTH_REQUIRED" : "CSRF_INVALID",
+    }, auth ? 401 : 403);
   }
   if (error instanceof ProviderApiError) {
     return json({ error: error.message, code: error.code }, error.status);
@@ -54,8 +57,9 @@ export function errorResponse(error: unknown): Response {
 }
 
 /**
- * 网关会把 /functions/v1/app 里的函数名段替换成上游名字，所以既不能假设路径含 "app"，
- * 也不能假设它被剥掉。这里只生成候选后缀，逐个拿去匹配路由表，不猜任何具体名字。
+ * 网关会把 /functions/v1/app 里的函数名段替换成上游名字（app 或 app-d<32位>），
+ * 前端又在业务路径前统一加了 /api。这里生成所有可能的候选后缀交给路由表匹配，
+ * 不猜任何具体函数名。
  */
 export function routeCandidates(request: Request): string[] {
   const path = new URL(request.url).pathname;
@@ -63,8 +67,14 @@ export function routeCandidates(request: Request): string[] {
   const push = (candidate: string) => {
     if (candidate && candidate !== "/" && !out.includes(candidate)) out.push(candidate);
   };
+  const withApiAlias = (candidate: string) => {
+    push(candidate);
+    if (candidate.startsWith("/api/")) push(candidate.slice(4));
+  };
+  const functionMatch = path.match(/^\/(?:functions\/v1\/)?app(?:-d[0-9a-f]{32})?(\/.*)?$/);
+  if (functionMatch) withApiAlias(functionMatch[1] || "/");
   const at = path.indexOf("/app/");
-  if (at >= 0) push(path.slice(at + 4));
+  if (at >= 0) withApiAlias(path.slice(at + 4));
   if (path.startsWith("/api/")) push(path.slice(4));
   const parts = path.split("/").filter(Boolean);
   if (parts.length > 1) push("/" + parts.slice(1).join("/"));

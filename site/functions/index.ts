@@ -1,16 +1,15 @@
+import { createDatabaseClient } from "./_qoder/backend.mjs";
 import { createApp } from "./app.ts";
-import { memoryStore } from "./store.ts";
+import { dbStore } from "./store-db.ts";
 
 /**
- * 部署入口：站点运行时只认这一个 index.ts。
- * 第 4 阶段把 memoryStore 换成平台库适配器即可，业务代码（app.ts）不动。
+ * 站点运行时的唯一入口。`_qoder/backend.mjs` 由平台在发布时注入，绝不能提交到仓库；
+ * 业务逻辑全部在 app.ts，本地验证用内存 Store，线上用平台数据库适配器。
  */
-/** Deno 的全局声明，便于没有 deno 的环境也能对本入口做类型检查。 */
 declare const Deno: {
-  serve(options: { port: number }, handler: (request: Request) => Response | Promise<Response>): unknown;
-  env: { get(key: string): string | undefined };
+  serve(handler: (request: Request) => Response | Promise<Response>): unknown;
 };
 
-const app = createApp({ store: memoryStore() });
+const app = createApp({ store: dbStore(createDatabaseClient()) });
 
-Deno.serve({ port: Number(Deno.env.get("PORT") ?? 8000) }, app.handler);
+Deno.serve(app.handler);
